@@ -14,7 +14,7 @@ public sealed class NativeWindowTests
 {
     [TestMethod]
     [DoNotParallelize]
-    public Task CompactWindow_DropMoveCancelClearAndReload_UsesRealControlsAndSavedIdentities()
+    public Task CompactWindow_TrayDirectMoveClearAndReload_UsesSavedIdentities()
     {
         return WpfTestHost.RunAsync(async () =>
         {
@@ -36,6 +36,17 @@ public sealed class NativeWindowTests
                     Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label == "aitestagent"));
                     Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label.StartsWith("azdo2")));
                     Capture(window, "01-compact-board");
+                    Assert.IsTrue(window.IsTrayIconVisible);
+                    window.WindowState = WindowState.Minimized;
+                    await SettleAsync(window);
+                    Assert.IsFalse(window.IsVisible);
+                    Assert.IsFalse(window.ShowInTaskbar);
+                    window.RestoreFromTray();
+                    await SettleAsync(window);
+                    Assert.IsTrue(window.IsVisible);
+                    Assert.IsTrue(window.ShowInTaskbar);
+                    Assert.AreEqual(WindowState.Normal, window.WindowState);
+                    Capture(window, "02-restored-from-tray");
 
                     var original = board.Settings.Slots.ToArray();
                     var sourceMachineId = original[1].MachineId;
@@ -43,23 +54,11 @@ public sealed class NativeWindowTests
                     var data = new DataObject(MainWindow.MachineDragFormat, sourceMachineId);
                     await window.AssignDroppedMachineAsync(original[0].Id, data);
                     await SettleAsync(window);
-                    Assert.IsTrue(window.MoveOverlay.IsVisible);
-                    CollectionAssert.AreEqual(original, board.Settings.Slots);
-                    Capture(window, "02-drag-move-confirmation");
-                    window.CancelMoveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    await SettleAsync(window);
-                    CollectionAssert.AreEqual(original, board.Settings.Slots);
-                    Capture(window, "03-drag-move-cancelled");
-
-                    await window.AssignDroppedMachineAsync(original[0].Id, data);
-                    MainWindow.Descendants<Button>(window.MoveOverlay).Single(b => Equals(b.Content, "Move assignment"))
-                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    await WaitForAsync(() => window.RefreshButton.IsEnabled && board.Settings.Slots[1].MachineId is null);
-                    await SettleAsync(window);
                     Assert.AreEqual(original[1].MachineId, board.Settings.Slots[0].MachineId);
+                    Assert.IsNull(board.Settings.Slots[1].MachineId);
                     Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label.StartsWith("azdo2")));
                     Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label == "azdo1"));
-                    Capture(window, "04-drag-move-confirmed");
+                    Capture(window, "03-direct-assignment-move");
 
                     await window.AssignDroppedMachineAsync(original[3].Id,
                         new DataObject(MainWindow.MachineDragFormat, DemoData.Machines()[3].UniqueId));
@@ -71,18 +70,15 @@ public sealed class NativeWindowTests
                     await SettleAsync(window);
 
                     var actions = MainWindow.Descendants<Button>(window.DesktopCards)
-                        .Single(button => Equals(button.Content, "...") &&
+                        .Single(button => button.Name == "ClearAssignmentButton" &&
                             ReferenceEquals(button.DataContext, window.Cells[0]));
                     actions.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    Assert.IsTrue(actions.ContextMenu.IsOpen);
-                    actions.ContextMenu.Items.OfType<MenuItem>()
-                        .Single(item => Equals(item.Header, "Clear assignment"))
-                        .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                     await WaitForAsync(() => window.RefreshButton.IsEnabled && board.Settings.Slots[0].MachineId is null);
                     await window.AssignDroppedMachineAsync(original[0].Id,
                         new DataObject(MainWindow.MachineDragFormat, DemoData.Machines()[2].UniqueId));
                     var saved = board.Settings.Slots.ToArray();
                     window.Close();
+                    Assert.IsFalse(window.IsTrayIconVisible);
                     var reopened = new SlotBoard(store);
                     await reopened.LoadAsync();
                     await reopened.EnsureFourCellsAsync();
@@ -93,6 +89,7 @@ public sealed class NativeWindowTests
                     CollectionAssert.AreEqual(saved, reopened.Settings.Slots);
                     Capture(window, "05-reopened-compact-board");
                     VerifyEqualViewports(window);
+                    window.SizeToContent = SizeToContent.Manual;
                     window.Width = window.MinWidth;
                     window.Height = window.MinHeight;
                     await SettleAsync(window);
@@ -161,8 +158,6 @@ public sealed class NativeWindowTests
     {
         var directory = Environment.GetEnvironmentVariable("BOXBOARD_SCREENSHOT_DIR");
         if (string.IsNullOrWhiteSpace(directory)) return;
-        if (window is MainWindow main && main.MoveOverlay.IsVisible)
-            window = Window.GetWindow(main.MoveOverlay);
         Directory.CreateDirectory(directory);
         var content = (FrameworkElement)window.Content;
         var image = new RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth + content.Margin.Left + content.Margin.Right),

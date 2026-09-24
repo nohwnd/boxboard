@@ -58,10 +58,12 @@ assignments.
 
 - Every virtual desktop has a card. Drag an unassigned Dev Box from the top
   tray to a slot, or drag an assigned tile to another slot or desktop.
-  Moving an assignment asks for confirmation.
+  A move updates both slots immediately; a replaced Dev Box returns to the
+  unassigned tray without closing its client.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
-  on a desktop card. One window fills the monitor's usable work area like
-  a maximized window; Windows App keeps its normal frame and taskbar entry.
+  using the graphical preview cards on each desktop. One window fills the
+  monitor's usable work area like a maximized window; Windows App keeps its
+  normal frame and taskbar entry.
   Choosing fewer slots unassigns only the slots that disappear. Their Dev
   Boxes return to the top tray; their already-open client windows stay open.
   Switching back to a larger layout does not reassign them automatically.
@@ -77,9 +79,15 @@ assignments.
   window before requesting a replacement. Turn Keep on off to leave
   reconnect dialogs for manual handling. Windows App handles authentication
   and MFA.
-- The tile's **...** menu provides **Connect / Reconnect**, **Bind an
-  existing window**, and **Clear assignment**. The **Log** button opens a
+- Use the trash icon on a tile to clear its assignment. Right-click an
+  assigned tile for manual **Connect / Reconnect** or **Bind an existing
+  window** when client titles are ambiguous. The **Log** button opens a
   separate in-memory diagnostic window.
+
+Minimize Boxboard to keep it running in the notification area without a
+taskbar button. Double-click its tray icon to open the manager; right-click
+the icon for Open and Exit. The window's **X** exits Boxboard and stops
+Keep on. Closing Boxboard does not close Windows App clients.
 
 **Window open** means that a Windows App window exists, not that its RDP
 connection is active. Boxboard does not click Reconnect in Windows App,

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,6 +13,7 @@ using Bevdox.Services;
 using Boxboard.Models;
 using Boxboard.Services;
 using static Boxboard.Models.BoardSettings;
+using Forms = System.Windows.Forms;
 
 namespace Boxboard;
 
@@ -27,15 +29,17 @@ public partial class MainWindow : Window
     private readonly Dictionary<Guid, LayoutRuntime> _layouts = [];
     private IReadOnlyList<VirtualDesktopInfo> _desktopChoices = [];
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(750) };
-    private bool _busy, _arranging, _closeRequested, _allowMove;
-    private (Guid? DesktopId, Guid Slot, string Machine)? _pendingMove;
+    private bool _busy, _arranging, _closeRequested, _loadedOnce;
     private string? _operationError;
     private Point _dragStart;
     private HwndSource? _source;
     private bool _sessionNotifications;
-    private Window? _movePrompt;
     private readonly ActivityLog _log;
     private LogWindow? _logWindow;
+    private Forms.NotifyIcon? _notifyIcon;
+    private Forms.ContextMenuStrip? _trayMenu;
+    private System.Drawing.Icon? _trayIcon;
+    private string? _trayError;
 
     private sealed record LayoutRuntime(Guid DesktopId, TargetSessionWindows Windows,
         SessionCoordinator Sessions, KeepConnectedController KeepConnected)
@@ -69,6 +73,7 @@ public partial class MainWindow : Window
     internal IReadOnlyList<DesktopCardViewModel> Cards =>
         (IReadOnlyList<DesktopCardViewModel>)DesktopCards.ItemsSource;
     internal IReadOnlyList<CellViewModel> Cells => Cards.SelectMany(card => card.Cells).ToList();
+    internal bool IsTrayIconVisible => _notifyIcon?.Visible == true;
 
     private void Render()
     {
@@ -83,10 +88,11 @@ public partial class MainWindow : Window
         var desktops = _desktopChoices.Count > 0 ? _desktopChoices :
             _board.Layouts.Count > 0
                 ? _board.Layouts.Select((layout, index) =>
-                    new VirtualDesktopInfo(index + 1, layout.DesktopId, layout.Name)).ToList()
+                    new VirtualDesktopInfo(SavedDesktopNumber(layout.Name, index + 1),
+                        layout.DesktopId, layout.Name)).ToList()
                 : [new VirtualDesktopInfo(1, Guid.Empty, "Desktop 1")];
         var scroll = DesktopScroll.VerticalOffset;
-        var cards = desktops.OrderBy(desktop => desktop.Id == _board.Settings.PrimaryDesktopId ? 0 : 1)
+        var cards = desktops.OrderByDescending(desktop => desktop.Available)
             .ThenBy(desktop => desktop.Number).Select(desktop =>
         {
             var primaryDemo = desktop.Id == Guid.Empty && _board.Settings.PrimaryDesktopId is null;
@@ -129,6 +135,14 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() => DesktopScroll.ScrollToVerticalOffset(scroll), DispatcherPriority.Loaded);
         UpdateBoardStatus();
         ShowError();
+    }
+
+    private static int SavedDesktopNumber(string name, int fallback)
+    {
+        const string prefix = "Desktop ";
+        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(name.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+            number > 0 ? number : fallback;
     }
 
     private void UpdateCellState(CellViewModel cell, LayoutRuntime? runtime, bool available)
@@ -187,7 +201,7 @@ public partial class MainWindow : Window
 
     private void ShowError()
     {
-        var error = _operationError ?? _board.RefreshError;
+        var error = _operationError ?? _board.RefreshError ?? _trayError;
         ErrorText.Text = error ?? "";
         ErrorText.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -213,7 +227,7 @@ public partial class MainWindow : Window
         {
             Render();
             _busy = false;
-            DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = _pendingMove is null;
+            DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = true;
             if (_closeRequested)
                 Close();
         }
@@ -221,11 +235,16 @@ public partial class MainWindow : Window
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        if (_loadedOnce)
+            return;
+        _loadedOnce = true;
+        InitializeTrayIcon();
         if (_demo)
         {
             await RefreshAsync();
             return;
         }
+
         await Dispatcher.Yield(DispatcherPriority.Background);
         if (_closeRequested)
             return;
@@ -290,6 +309,69 @@ public partial class MainWindow : Window
             _log.Write("Error", _operationError);
             ShowError();
         }
+    }
+
+    private void InitializeTrayIcon()
+    {
+        if (_notifyIcon is not null || _trayError is not null)
+            return;
+        try
+        {
+            _trayIcon = System.Drawing.Icon.ExtractAssociatedIcon(
+                Environment.ProcessPath ?? throw new InvalidOperationException("The executable path is unavailable."))
+                ?? throw new InvalidOperationException("The Boxboard executable has no icon.");
+            _trayMenu = new Forms.ContextMenuStrip();
+            _trayMenu.Items.Add("Open Boxboard", null, (_, _) => Dispatcher.BeginInvoke(RestoreFromTray));
+            _trayMenu.Items.Add("Exit Boxboard", null, (_, _) => Dispatcher.BeginInvoke(Close));
+            _notifyIcon = new Forms.NotifyIcon
+            {
+                Icon = _trayIcon,
+                Text = _demo ? "Boxboard (offline demo)" : "Boxboard",
+                ContextMenuStrip = _trayMenu,
+                Visible = true
+            };
+            _notifyIcon.MouseDoubleClick += (_, args) =>
+            {
+                if (args.Button == Forms.MouseButtons.Left)
+                    Dispatcher.BeginInvoke(RestoreFromTray);
+            };
+            if (WindowState == WindowState.Minimized)
+                HideToTray();
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon?.Dispose();
+            _notifyIcon = null;
+            _trayMenu?.Dispose();
+            _trayMenu = null;
+            _trayIcon?.Dispose();
+            _trayIcon = null;
+            _trayError = $"Tray icon unavailable: {ex.Message} Minimize will still use the taskbar.";
+            _log.Write("Error", _trayError);
+            ShowError();
+        }
+    }
+
+    private void Window_StateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized && IsTrayIconVisible)
+            HideToTray();
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+    }
+
+    internal void RestoreFromTray()
+    {
+        if (_closeRequested)
+            return;
+        ShowInTaskbar = true;
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
     }
 
     private LayoutRuntime GetOrCreateLayout(Guid desktopId)
@@ -382,12 +464,21 @@ public partial class MainWindow : Window
     });
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
-    private async void CardLayout_Changed(object sender, SelectionChangedEventArgs e)
+    private void CardLayoutPicker_Click(object sender, RoutedEventArgs e)
     {
-        if (_demo || sender is not ComboBox { DataContext: DesktopCardViewModel card } ||
-            e.AddedItems.OfType<WindowLayoutChoice>().SingleOrDefault() is not { } selected ||
-            selected.Mode == card.Mode || !card.CanEdit)
+        if (sender is Button { ContextMenu: { } menu } button)
+        {
+            menu.PlacementTarget = button;
+            menu.IsOpen = true;
+        }
+    }
+
+    private async void CardLayoutChoice_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demo || sender is not MenuItem { DataContext: DesktopCardViewModel card,
+            Tag: WindowLayoutMode mode } || mode == card.Mode || !card.CanEdit)
             return;
+        var selected = DesktopCardViewModel.LayoutChoices.Single(choice => choice.Mode == mode);
         await RunAsync(async () =>
         {
             var previous = _board.GetVisibleSlots(card.DesktopId);
@@ -482,8 +573,7 @@ public partial class MainWindow : Window
 
     private async Task UpdateSessionsAsync()
     {
-        if (_windows is null || _busy || _arranging ||
-            _pendingMove is not null)
+        if (_windows is null || _busy || _arranging)
             return;
         _arranging = true;
         try
@@ -574,19 +664,9 @@ public partial class MainWindow : Window
         var source = _board.Layouts.SelectMany(layout => _board.GetSlots(layout.DesktopId)
             .Select(assignment => (layout.DesktopId, Slot: assignment)))
             .FirstOrDefault(entry => SameId(entry.Slot.MachineId, machine));
-        bool Confirm(MoveRequest request)
-        {
-            if (_allowMove) return true;
-            _pendingMove = (desktopId, slot, machine);
-            MoveText.Text = $"Move {request.MachineName} from {request.SourceSlot} to {request.TargetSlot}?\n\n" +
-                $"{request.SourceSlot} will become unassigned." +
-                (request.ReplacedMachine is null ? "" : $"\n{request.ReplacedMachine} will be unassigned from {request.TargetSlot}.");
-            ShowMovePrompt();
-            return false;
-        }
         var changed = desktopId is { } id
-            ? await _board.AssignAsync(id, slot, machine, Confirm, _lifetime.Token)
-            : await _board.AssignAsync(slot, machine, Confirm, _lifetime.Token);
+            ? await _board.AssignAsync(id, slot, machine, _ => true, _lifetime.Token)
+            : await _board.AssignAsync(slot, machine, _ => true, _lifetime.Token);
         if (changed)
         {
             _log.Write(desktopId is { } selected
@@ -660,73 +740,12 @@ public partial class MainWindow : Window
                 cell.Slot.Id, machine.UniqueId);
         else { _operationError = "Select an unassigned Dev Box above, or drag one into this slot."; ShowError(); }
     }
-    private void CancelMove_Click(object sender, RoutedEventArgs e)
-    {
-        _pendingMove = null;
-        CloseMovePrompt();
-        DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = true;
-        Render();
-    }
-    private void MoveOverlay_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape) { CancelMove_Click(sender, e); e.Handled = true; }
-    }
-    private async void ConfirmMove_Click(object sender, RoutedEventArgs e)
-    {
-        if (_pendingMove is not { } pending) return;
-        _pendingMove = null;
-        CloseMovePrompt();
-        _allowMove = true;
-        try { await SelectAsync(pending.DesktopId, pending.Slot, pending.Machine); }
-        finally { _allowMove = false; }
-    }
-
-    private void ShowMovePrompt()
-    {
-        ((Grid)Content).Children.Remove(MoveOverlay);
-        MoveOverlay.Visibility = Visibility.Visible;
-        _movePrompt = new Window
-        {
-            Owner = this, Title = "Move Boxboard assignment?", Content = MoveOverlay,
-            Width = 620, Height = 350, ResizeMode = ResizeMode.NoResize,
-            ShowInTaskbar = false, ShowActivated = !_demo, WindowStartupLocation = WindowStartupLocation.CenterOwner
-        };
-        _movePrompt.Closed += (_, _) =>
-        {
-            if (_pendingMove is not null)
-                CancelMove_Click(this, new RoutedEventArgs());
-        };
-        _movePrompt.Show();
-        CancelMoveButton.Focus();
-    }
-
-    private void CloseMovePrompt()
-    {
-        var prompt = _movePrompt;
-        _movePrompt = null;
-        if (prompt is not null)
-        {
-            prompt.Content = null;
-            prompt.Close();
-        }
-        MoveOverlay.Visibility = Visibility.Collapsed;
-        if (MoveOverlay.Parent is null)
-            ((Grid)Content).Children.Add(MoveOverlay);
-    }
     private async void Clear_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: CellViewModel cell })
             await RunAsync(() => cell.DesktopId == Guid.Empty
                 ? _board.ClearSlotAsync(cell.Slot.Id, _lifetime.Token)
                 : _board.ClearSlotAsync(cell.DesktopId, cell.Slot.Id, _lifetime.Token));
-    }
-    private void More_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { ContextMenu: { } menu } button)
-        {
-            menu.PlacementTarget = button;
-            menu.IsOpen = true;
-        }
     }
     private async void BindPicker_Click(object sender, RoutedEventArgs e)
     {
@@ -816,6 +835,14 @@ public partial class MainWindow : Window
     {
         _closeRequested = true;
         _timer.Stop();
+        if (_notifyIcon is not null)
+        {
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _notifyIcon = null;
+        }
+        _trayMenu?.Dispose();
+        _trayIcon?.Dispose();
         foreach (var runtime in _layouts.Values)
         {
             runtime.KeepConnected.Dispose();
