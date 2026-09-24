@@ -26,9 +26,23 @@ public sealed class KeepConnectedControllerTests
         public BoardEnvironment Environment { get; set; } = new(Desktop, true, true, new(0, 0, 1920, 1080));
         public List<SessionWindow> Items { get; set; } = [];
         public int VisibleWindowCount { get; set; } = 1;
+        public int CloseAttempts { get; private set; }
+        public bool RejectClose { get; set; }
         public BoardEnvironment GetEnvironment() => Environment;
         public IReadOnlyList<SessionWindow> Enumerate() => Items.ToArray();
         public int CountVisibleTopLevelWindows(WindowIdentity identity) => VisibleWindowCount;
+        public Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Assert.AreEqual(2, VisibleWindowCount);
+            Assert.IsTrue(Items.Any(item => item.Identity == window.Identity));
+            CloseAttempts++;
+            if (RejectClose)
+                throw new InvalidOperationException("Windows App refused to close the prompt.");
+            Items.RemoveAll(item => item.Identity == window.Identity);
+            VisibleWindowCount = 1;
+            return Task.CompletedTask;
+        }
         public PixelRect GetVisibleBounds(SessionWindow window) => window.Bounds;
         public Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct)
         {
@@ -199,7 +213,7 @@ public sealed class KeepConnectedControllerTests
     }
 
     [TestMethod]
-    public async Task ExistingClientWithAdditionalDialog_DoesNotLaunchDuplicate()
+    public async Task ReconnectPrompt_ClosesOldClientBeforeRequestingOneReplacement()
     {
         var windows = new Windows { Items = [Client()], VisibleWindowCount = 2 };
         var clock = new Clock();
@@ -209,11 +223,137 @@ public sealed class KeepConnectedControllerTests
             _ => launches++, clock);
         using var keep = new KeepConnectedController(windows, sessions, clock);
         await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
-        clock.Now += TimeSpan.FromMinutes(5);
-        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, windows.CloseAttempts);
+        Assert.IsEmpty(windows.Items);
         Assert.AreEqual(0, launches);
-        Assert.HasCount(1, sessions.ReconnectPromptCandidates);
-        Assert.IsNull(sessions.For(Slot).BoundWindow);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, launches);
+        Assert.IsTrue(sessions.For(Slot).Connecting);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, launches);
+        Assert.AreEqual(1, windows.CloseAttempts);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_KeepConnectedOffLeavesBothWindowsAlone()
+    {
+        var windows = new Windows { Items = [Client()], VisibleWindowCount = 2 };
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => throw new AssertFailedException("Disabled Keep connected must not request a connection."),
+            _ => Assert.Fail("Disabled Keep connected must not launch."));
+        using var keep = new KeepConnectedController(windows, sessions);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: false);
+        Assert.AreEqual(0, windows.CloseAttempts);
+        Assert.HasCount(1, windows.Items);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_ReplacesAlreadyRequestedClientWithoutOverlappingLaunches()
+    {
+        var windows = new Windows();
+        int launches = 0;
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++);
+        using var keep = new KeepConnectedController(windows, sessions);
+        await sessions.ConnectAsync(Slot, Machine, nameIsUnique: true);
+        Assert.AreEqual(1, launches);
+        windows.Items = [Client()];
+        windows.VisibleWindowCount = 2;
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, windows.CloseAttempts);
+        Assert.AreEqual(1, launches);
+        Assert.IsFalse(sessions.For(Slot).Connecting);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(2, launches);
+        Assert.IsTrue(sessions.For(Slot).Connecting);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_AmbiguousAndOtherDesktopClientsAreNeverClosed()
+    {
+        var windows = new Windows { Items = [Client()], VisibleWindowCount = 2 };
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => throw new AssertFailedException("Ambiguous client must not connect."),
+            _ => Assert.Fail("Ambiguous client must not launch."));
+        using var keep = new KeepConnectedController(windows, sessions);
+        var duplicate = DemoData.Machines()[1];
+        duplicate.OriginalName = Machine.OriginalName;
+        await keep.TickAsync(Assignments, [Machine, duplicate], enabled: true);
+        Assert.AreEqual(0, windows.CloseAttempts);
+
+        windows.Items = [Client() with { DesktopId = Guid.NewGuid() }];
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(0, windows.CloseAttempts);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_ThreeWindowsOrLockedDesktopDoNotTriggerClose()
+    {
+        var windows = new Windows { Items = [Client()], VisibleWindowCount = 3 };
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => throw new AssertFailedException("Unconfirmed prompt must not connect."),
+            _ => Assert.Fail("Unconfirmed prompt must not launch."));
+        using var keep = new KeepConnectedController(windows, sessions);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(0, windows.CloseAttempts);
+        windows.VisibleWindowCount = 2;
+        windows.Environment = windows.Environment with { CanInteract = false };
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(0, windows.CloseAttempts);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_FailedCloseIsNotRepeatedUntilManualReset()
+    {
+        var windows = new Windows { Items = [Client()], VisibleWindowCount = 2, RejectClose = true };
+        int launches = 0;
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++);
+        using var keep = new KeepConnectedController(windows, sessions);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            keep.TickAsync(Assignments, DemoData.Machines(), enabled: true));
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, windows.CloseAttempts);
+        Assert.AreEqual(0, launches);
+        keep.Reset();
+        windows.RejectClose = false;
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(2, windows.CloseAttempts);
+        Assert.AreEqual(1, launches);
+    }
+
+    [TestMethod]
+    public async Task ReconnectPrompt_RepeatedShortLivedClientsRespectThreeRequestBudget()
+    {
+        var windows = new Windows { Items = [Client()], VisibleWindowCount = 2 };
+        var clock = new Clock();
+        int launches = 0;
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++, clock);
+        using var keep = new KeepConnectedController(windows, sessions, clock);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(1, launches);
+        for (int attempt = 2; attempt <= 3; attempt++)
+        {
+            clock.Now += attempt == 2 ? TimeSpan.FromSeconds(5) : TimeSpan.FromSeconds(30);
+            windows.Items = [Client() with { Identity = new(attempt * 10, attempt * 40, attempt * 100) }];
+            windows.VisibleWindowCount = 2;
+            await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+            await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+            Assert.AreEqual(attempt, launches);
+        }
+        clock.Now += TimeSpan.FromMinutes(5);
+        windows.Items = [Client() with { Identity = new(40, 160, 400) }];
+        windows.VisibleWindowCount = 2;
+        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        Assert.AreEqual(3, launches);
+        Assert.AreEqual(3, windows.CloseAttempts);
+        Assert.HasCount(1, windows.Items);
     }
 
     [TestMethod]

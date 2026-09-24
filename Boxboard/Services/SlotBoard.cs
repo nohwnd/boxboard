@@ -113,14 +113,23 @@ public sealed class SlotBoard(ISettingsStore store)
             throw new ArgumentOutOfRangeException(nameof(mode));
         if (GetLayoutMode(desktopId) == mode)
             return Task.CompletedTask;
-        return ChangeAsync(settings => settings.PrimaryDesktopId == desktopId
-            ? settings with { Version = Math.Max(settings.Version, 4), PrimaryLayoutMode = mode }
-            : settings with
-            {
-                Version = Math.Max(settings.Version, 4),
-                DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.DesktopId == desktopId
-                    ? layout with { LayoutMode = mode } : layout).ToList()
-            }, ct);
+        return ChangeAsync(settings =>
+        {
+            var previousMode = settings.PrimaryDesktopId == desktopId ? settings.PrimaryLayoutMode :
+                settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).LayoutMode;
+            var oldCount = VisibleCount(previousMode);
+            var newCount = VisibleCount(mode);
+            var slots = SlotsFor(settings, desktopId).Select((slot, index) =>
+                index >= newCount && index < oldCount ? slot with { MachineId = null } : slot).ToList();
+            return settings.PrimaryDesktopId == desktopId
+                ? settings with { Version = Math.Max(settings.Version, 4), PrimaryLayoutMode = mode, Slots = slots }
+                : settings with
+                {
+                    Version = Math.Max(settings.Version, 4),
+                    DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.DesktopId == desktopId
+                        ? layout with { LayoutMode = mode, Slots = slots } : layout).ToList()
+                };
+        }, ct);
     }
 
     private static int VisibleCount(WindowLayoutMode mode) => mode switch

@@ -355,7 +355,7 @@ public sealed class SlotBoardTests
     }
 
     [TestMethod]
-    public async Task LayoutMode_ChangesVisibleSlotsWithoutDeletingOffboardAssignments()
+    public async Task LayoutMode_UnassignsDisappearingSlotsWithoutDeletingTheirIdentities()
     {
         var store = new MemoryStore();
         var board = new SlotBoard(store);
@@ -367,7 +367,9 @@ public sealed class SlotBoardTests
         Assert.AreEqual(4, board.Settings.Version);
         Assert.AreEqual(WindowLayoutMode.SideBySide, board.LayoutMode);
         Assert.HasCount(2, board.VisibleSlots);
-        CollectionAssert.AreEqual(original, board.Settings.Slots);
+        CollectionAssert.AreEqual(original.Take(2).ToArray(), board.Settings.Slots.Take(2).ToArray());
+        Assert.AreEqual(original[2] with { MachineId = null }, board.Settings.Slots[2]);
+        Assert.AreEqual("offline-box", board.Options.Single(option => option.UniqueId == original[2].MachineId).Label);
         Assert.IsTrue(board.KeepConnected);
 
         var reopened = new SlotBoard(store);
@@ -378,7 +380,8 @@ public sealed class SlotBoardTests
         Assert.HasCount(3, reopened.VisibleSlots);
         await reopened.SetLayoutModeAsync(WindowLayoutMode.Quadrants);
         Assert.HasCount(4, reopened.VisibleSlots);
-        CollectionAssert.AreEqual(original, reopened.CurrentSlots.ToArray());
+        CollectionAssert.AreEqual(board.Settings.Slots.ToArray(), reopened.CurrentSlots.ToArray());
+        Assert.IsNull(reopened.CurrentSlots[2].MachineId);
     }
 
     [TestMethod]
@@ -456,20 +459,29 @@ public sealed class SlotBoardTests
     }
 
     [TestMethod]
-    public async Task SingleWindow_HidesOtherAssignmentsWithoutRemovingThem()
+    public async Task SingleWindow_UnassignsOnlyDisappearingSlotsAndPreservesPreviouslyHiddenOnes()
     {
         var store = new MemoryStore();
         var board = new SlotBoard(store);
         await board.LoadAsync();
         await board.EnsureFourCellsAsync();
+        await board.AddSlotAsync();
         var desktop = Guid.NewGuid();
         await board.SelectDesktopAsync(desktop, "Desktop 2");
+        await board.AssignAsync(board.GetSlots(desktop)[3].Id, DemoData.Machines()[2].UniqueId, _ => true);
+        await board.AssignAsync(board.GetSlots(desktop)[4].Id, DemoData.Machines()[3].UniqueId, _ => true);
         var saved = board.GetSlots(desktop).ToArray();
 
         await board.SetLayoutModeAsync(desktop, WindowLayoutMode.SingleWindow);
         Assert.HasCount(1, board.GetVisibleSlots(desktop));
         Assert.AreEqual(saved[0], board.GetVisibleSlots(desktop)[0]);
-        CollectionAssert.AreEqual(saved, board.GetSlots(desktop).ToArray());
+        for (int index = 1; index < 4; index++)
+        {
+            Assert.AreEqual(saved[index].Id, board.GetSlots(desktop)[index].Id);
+            Assert.IsNull(board.GetSlots(desktop)[index].MachineId);
+        }
+        Assert.AreEqual(saved[4], board.GetSlots(desktop)[4]);
+        Assert.AreEqual("azdo2", board.Options.Single(option => option.UniqueId == saved[1].MachineId).Label);
         Assert.AreEqual(4, store.Saved.Version);
 
         var reopened = new SlotBoard(store);
@@ -477,6 +489,40 @@ public sealed class SlotBoardTests
         Assert.AreEqual(WindowLayoutMode.SingleWindow, reopened.GetLayoutMode(desktop));
         Assert.HasCount(1, reopened.GetVisibleSlots(desktop));
         await reopened.SetLayoutModeAsync(desktop, WindowLayoutMode.Quadrants);
-        CollectionAssert.AreEqual(saved, reopened.GetVisibleSlots(desktop).ToArray());
+        Assert.IsTrue(reopened.GetVisibleSlots(desktop).Skip(1).All(slot => slot.MachineId is null));
+        Assert.AreEqual(saved[4], reopened.GetSlots(desktop)[4]);
+    }
+
+    [TestMethod]
+    public async Task ShrinkingOtherDesktop_LeavesPrimaryAssignmentsAndFailedSavesUntouched()
+    {
+        var store = new MemoryStore();
+        var board = new SlotBoard(store);
+        await board.LoadAsync();
+        await board.EnsureFourCellsAsync();
+        var primary = Guid.NewGuid();
+        var secondary = Guid.NewGuid();
+        await board.SelectDesktopAsync(primary, "Desktop 1");
+        await board.SelectDesktopAsync(secondary, "Desktop 2");
+        await board.AssignAsync(secondary, board.GetSlots(secondary)[2].Id, DemoData.Machines()[2].UniqueId, _ => true);
+        await board.AssignAsync(secondary, board.GetSlots(secondary)[3].Id, DemoData.Machines()[3].UniqueId, _ => true);
+        await board.SelectDesktopAsync(primary, "Desktop 1");
+        var primarySlots = board.GetSlots(primary).ToArray();
+        var before = board.Settings;
+
+        store.FailSave = true;
+        await Assert.ThrowsExactlyAsync<IOException>(() =>
+            board.SetLayoutModeAsync(secondary, WindowLayoutMode.SideBySide));
+        Assert.AreSame(before, board.Settings);
+        store.FailSave = false;
+
+        await board.SetLayoutModeAsync(secondary, WindowLayoutMode.SideBySide);
+        Assert.AreEqual(primary, board.SelectedDesktopId);
+        CollectionAssert.AreEqual(primarySlots, board.GetSlots(primary).ToArray());
+        Assert.IsTrue(board.GetSlots(secondary).Skip(2).All(slot => slot.MachineId is null));
+        var restarted = new SlotBoard(store);
+        await restarted.LoadAsync();
+        Assert.AreEqual(WindowLayoutMode.SideBySide, restarted.GetLayoutMode(secondary));
+        Assert.IsTrue(restarted.GetSlots(secondary).Skip(2).All(slot => slot.MachineId is null));
     }
 }

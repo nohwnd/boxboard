@@ -121,6 +121,17 @@ public sealed class SessionCoordinator(
         }
     }
 
+    public void CancelPending(SlotAssignment slot, string reason)
+    {
+        var session = For(slot);
+        if (!session.Connecting)
+            return;
+        session.Request?.Cancel();
+        session.Connecting = false;
+        session.Deadline = null;
+        session.Status = reason;
+    }
+
     private BoardEnvironment RequireEnvironment(bool requireCurrentDesktop = true)
     {
         var environment = windows.GetEnvironment();
@@ -158,7 +169,7 @@ public sealed class SessionCoordinator(
         session.Failed = false;
         _failedPlacements.Remove(identity);
         session.Status = preservePosition
-            ? $"Bound HWND {identity.Handle}, PID {identity.ProcessId}. Its current position is preserved until Apply layout."
+            ? $"Bound HWND {identity.Handle}, PID {identity.ProcessId}. Its current position is preserved until Re-apply."
             : $"Bound HWND {identity.Handle}, PID {identity.ProcessId}. Waiting for initial slot placement.";
     }
 
@@ -357,7 +368,8 @@ public sealed class SessionCoordinator(
         {
             session.ReconnectPromptSuspected = true;
             session.Status = $"Possible reconnect prompt for {machine.EffectiveName}: " +
-                $"{prompt.VisibleWindowCount} visible windows from its client process. Verify in Windows App; no automatic action.";
+                $"{prompt.VisibleWindowCount} visible windows from its client process. " +
+                "Keep on may close this client and request a replacement; connection state remains unknown.";
             return;
         }
         if (session.ReconnectPromptSuspected)
@@ -443,12 +455,12 @@ public sealed class SessionCoordinator(
         }
         if (_preservedExisting.Contains(bound.Identity))
         {
-            session.Status = "Existing client bound; its size and position are preserved. Use Apply layout to tile it.";
+            session.Status = "Existing client bound; its size and position are preserved. Use Re-apply to tile it.";
             return;
         }
         if (_manuallyPositioned.Contains(bound.Identity))
         {
-            session.Status = "Client was moved manually. Its position is retained until Apply layout.";
+            session.Status = "Client was moved manually. Its position is retained until Re-apply.";
             return;
         }
         try
@@ -465,7 +477,7 @@ public sealed class SessionCoordinator(
                 windows.GetVisibleBounds(bound) != bounds)
             {
                 _manuallyPositioned.Add(bound.Identity);
-                session.Status = "Client was moved manually. Its position is retained until Apply layout.";
+                session.Status = "Client was moved manually. Its position is retained until Re-apply.";
                 return;
             }
             if (!_placements.TryGetValue(bound.Identity, out previous) || previous != bounds)
@@ -490,7 +502,7 @@ public sealed class SessionCoordinator(
             session.Status = attempts < 3
                 ? $"Windows App did not accept the initial cell size (attempt {attempts}/3). " +
                     $"Retrying in {retryDelay} seconds; no new connection will be launched. {ex.Message}"
-                : $"Window placement failed after three attempts. Use Apply layout to retry. {ex.Message}";
+                : $"Window placement failed after three attempts. Use Re-apply to retry. {ex.Message}";
             if (attempts >= 3)
             {
                 session.Connecting = false;

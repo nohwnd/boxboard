@@ -22,6 +22,13 @@ public sealed class TargetSessionWindows(
     public IReadOnlyList<SessionWindow> Enumerate() => managerWindows.Enumerate();
     public int CountVisibleTopLevelWindows(WindowIdentity identity) =>
         managerWindows.CountVisibleTopLevelWindows(identity);
+    public Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct)
+    {
+        var environment = GetEnvironment();
+        if (!environment.CanInteract || window.DesktopId != desktopId)
+            throw new InvalidOperationException("The assigned desktop is unavailable; no reconnect window was closed.");
+        return managerWindows.CloseReconnectPromptAsync(window, ct);
+    }
     public PixelRect GetVisibleBounds(SessionWindow window) => managerWindows.GetVisibleBounds(window);
 
     public Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct)

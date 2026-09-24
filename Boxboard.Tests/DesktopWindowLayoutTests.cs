@@ -20,6 +20,8 @@ public sealed class DesktopWindowLayoutTests
         public BoardEnvironment GetEnvironment() => Environment;
         public IReadOnlyList<SessionWindow> Enumerate() => Items.ToArray();
         public int CountVisibleTopLevelWindows(WindowIdentity identity) => 1;
+        public Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct) =>
+            throw new AssertFailedException("Unexpected reconnect-window close.");
         public PixelRect GetVisibleBounds(SessionWindow window) => window.Bounds;
         public Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct)
         {

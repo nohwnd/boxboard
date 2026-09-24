@@ -62,7 +62,9 @@ assignments.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
   on a desktop card. One window fills the monitor's usable work area like
   a maximized window; Windows App keeps its normal frame and taskbar entry.
-  Assignments outside the selected layout remain saved but inactive.
+  Choosing fewer slots unassigns only the slots that disappear. Their Dev
+  Boxes return to the top tray; their already-open client windows stay open.
+  Switching back to a larger layout does not reassign them automatically.
 - Assignment changes and layout choices take effect automatically.
   **Re-apply** explicitly snaps all visible assigned windows back to their
   slots, including windows you have manually resized, and retries missing
@@ -70,14 +72,18 @@ assignments.
 - **Keep on** is enabled by default for each desktop. While Boxboard runs,
   it can request a missing assigned client again, with a limit of three
   automatic requests per slot. Turn it off on a card if you want to leave
-  a closed client closed. Windows App handles authentication and MFA.
+  a closed client closed. If an assigned Windows App client has one additional
+  visible window in its process, Keep on closes the old client and that
+  window before requesting a replacement. Turn Keep on off to leave
+  reconnect dialogs for manual handling. Windows App handles authentication
+  and MFA.
 - The tile's **...** menu provides **Connect / Reconnect**, **Bind an
   existing window**, and **Clear assignment**. The **Log** button opens a
   separate in-memory diagnostic window.
 
 **Window open** means that a Windows App window exists, not that its RDP
-connection is active. Boxboard never clicks a Windows App reconnect dialog,
-does not bypass Windows lock or sign-in, and does not store credentials.
+connection is active. Boxboard does not click Reconnect in Windows App,
+bypass Windows lock or sign-in, or store credentials.
 If a virtual desktop disappears, its assignments remain saved, but Boxboard
 cannot arrange clients on that missing desktop.
 

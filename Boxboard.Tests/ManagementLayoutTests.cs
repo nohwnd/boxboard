@@ -88,7 +88,7 @@ public sealed class ManagementLayoutTests
 
     [TestMethod]
     [DoNotParallelize]
-    public Task OneWindowCard_UsesFullCardWidthAndKeepsOtherAssignmentsHidden()
+    public Task OneWindowCard_UsesFullCardWidthAndReturnsRemovedAssignmentsToTray()
     {
         return WpfTestHost.RunAsync(() =>
         {
@@ -104,7 +104,9 @@ public sealed class ManagementLayoutTests
                 Assert.HasCount(1, window.Cards);
                 Assert.HasCount(1, window.Cards[0].Cells);
                 Assert.AreEqual(WindowLayoutMode.SingleWindow, window.Cards[0].SelectedMode.Mode);
-                Assert.Contains("azdo2", window.Cards[0].HiddenAssignments);
+                Assert.IsFalse(window.Cards[0].HasHiddenAssignments);
+                Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>()
+                    .Any(machine => machine.Label == "azdo2"));
                 var tile = MainWindow.Descendants<Border>(window.DesktopCards)
                     .Single(border => border.Name == "SlotTile");
                 Assert.IsGreaterThan(500.0, tile.ActualWidth);

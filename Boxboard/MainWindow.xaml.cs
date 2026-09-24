@@ -177,7 +177,7 @@ public partial class MainWindow : Window
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
         if (names is { Count: > 0 })
             StatusText.Text = $"Possible reconnect prompt: {string.Join(", ", names)}. " +
-                "Verify in Windows App; no automatic action.";
+                "Keep on may restart the client; verify in Windows App.";
         else
         {
             var refresh = _board.Settings.LastRefreshUtc is { } time ? $" Last discovery: {time.ToLocalTime():g}." : "";
@@ -390,12 +390,18 @@ public partial class MainWindow : Window
             return;
         await RunAsync(async () =>
         {
+            var previous = _board.GetVisibleSlots(card.DesktopId);
             await _board.SetLayoutModeAsync(card.DesktopId, selected.Mode, _lifetime.Token);
             var runtime = _layouts[card.DesktopId];
+            var removed = previous.Skip(_board.GetVisibleSlots(card.DesktopId).Count)
+                .Where(slot => slot.MachineId is not null).ToList();
+            foreach (var slot in removed)
+                runtime.Sessions.For(_board.GetSlots(card.DesktopId).Single(item => item.Id == slot.Id));
             runtime.PendingApply = true;
             runtime.KeepConnected.Reset();
             await ApplyVisibleLayoutAsync(card.DesktopId, runtime);
-            _log.Write("Layout", $"{card.Name}: {selected.Name} applied automatically.");
+            _log.Write("Layout", $"{card.Name}: {selected.Name} applied automatically." +
+                (removed.Count == 0 ? "" : $" {removed.Count} Dev Box assignment(s) returned to the tray."));
         });
     }
 

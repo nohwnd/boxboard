@@ -97,6 +97,7 @@ public interface ISessionWindows
     BoardEnvironment GetEnvironment();
     IReadOnlyList<SessionWindow> Enumerate();
     int CountVisibleTopLevelWindows(WindowIdentity identity);
+    Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct);
     PixelRect GetVisibleBounds(SessionWindow window);
     Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct);
 }

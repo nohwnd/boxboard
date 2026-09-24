@@ -54,23 +54,63 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
         return result;
     }
 
-    public int CountVisibleTopLevelWindows(WindowIdentity identity)
+    public int CountVisibleTopLevelWindows(WindowIdentity identity) => VisibleTopLevelWindows(identity).Count;
+
+    public async Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct)
+    {
+        if (!CanInteractWithInputDesktop())
+            throw new InvalidOperationException("Windows is locked; the reconnect prompt was not closed.");
+        var identity = window.Identity;
+        if (!Enumerate().Any(candidate => candidate.Identity == identity &&
+            candidate.DesktopId == window.DesktopId && candidate.Title == window.Title))
+            throw new InvalidOperationException("The assigned client changed before its reconnect prompt could be closed.");
+        var handles = VisibleTopLevelWindows(identity);
+        if (handles.Count != 2 || !handles.Contains(identity.Handle))
+            throw new InvalidOperationException("The client no longer has exactly one additional visible window.");
+        var prompt = handles.Single(handle => handle != identity.Handle);
+        if (ReadClass(prompt) == "TscShellContainerClass")
+            throw new InvalidOperationException("The additional window is another client, not a reconnect prompt.");
+        ct.ThrowIfCancellationRequested();
+        if (PostMessageW(prompt, 0x0010, 0, 0) == 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        for (int attempt = 0; attempt < 50 && IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0; attempt++)
+            await Task.Delay(100, ct);
+        if (IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0)
+            throw new TimeoutException("Windows App did not close the reconnect prompt; no replacement was launched.");
+        if (IsWindow(identity.Handle) != 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = VisibleTopLevelWindows(identity);
+            GetWindowThreadProcessId(identity.Handle, out var processId);
+            if (processId != (uint)identity.ProcessId ||
+                ReadClass(identity.Handle) != "TscShellContainerClass")
+                throw new InvalidOperationException("The original client identity changed; no replacement was launched.");
+            if (PostMessageW(identity.Handle, 0x0010, 0, 0) == 0)
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
+            for (int attempt = 0; attempt < 50 && IsWindow(identity.Handle) != 0; attempt++)
+                await Task.Delay(100, ct);
+            if (IsWindow(identity.Handle) != 0)
+                throw new TimeoutException("Windows App did not close the old client; no replacement was launched.");
+        }
+    }
+
+    private static IReadOnlyList<nint> VisibleTopLevelWindows(WindowIdentity identity)
     {
         using var process = Process.GetProcessById(identity.ProcessId);
         if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != identity.ProcessStartUtcTicks)
             throw new InvalidOperationException("The client process changed before its windows could be counted.");
-        int count = 0;
+        var handles = new List<nint>();
         EnumWindowsCallback callback = (hwnd, _) =>
         {
             GetWindowThreadProcessId(hwnd, out var processId);
             if (processId == (uint)identity.ProcessId && IsWindowVisible(hwnd) != 0)
-                count++;
+                handles.Add(hwnd);
             return 1;
         };
         if (EnumWindows(callback, 0) == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         GC.KeepAlive(callback);
-        return count;
+        return handles;
     }
 
     public async Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct)
@@ -182,6 +222,10 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
     private static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [LibraryImport("user32.dll")]
     private static partial int IsWindowVisible(nint hwnd);
+    [LibraryImport("user32.dll")]
+    private static partial int IsWindow(nint hwnd);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
     [LibraryImport("dwmapi.dll")]
     private static partial int DwmGetWindowAttribute(nint hwnd, uint attribute, out NativeRect value, uint size);
     [LibraryImport("user32.dll", SetLastError = true)]

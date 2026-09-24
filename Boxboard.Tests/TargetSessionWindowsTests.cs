@@ -17,9 +17,15 @@ public sealed class TargetSessionWindowsTests
     {
         public BoardEnvironment Environment { get; set; } = new(ManagerDesktop, true, true, Area);
         public List<SessionWindow> Items { get; set; } = [];
+        public WindowIdentity? ClosedIdentity { get; private set; }
         public BoardEnvironment GetEnvironment() => Environment;
         public IReadOnlyList<SessionWindow> Enumerate() => Items.ToArray();
         public int CountVisibleTopLevelWindows(WindowIdentity identity) => 1;
+        public Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct)
+        {
+            ClosedIdentity = window.Identity;
+            return Task.CompletedTask;
+        }
         public PixelRect GetVisibleBounds(SessionWindow window) => window.Bounds;
         public Task PlaceAsync(SessionWindow window, PixelRect bounds, CancellationToken ct) =>
             throw new AssertFailedException("The manager desktop must not position target-desktop clients.");
@@ -59,6 +65,24 @@ public sealed class TargetSessionWindowsTests
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             target.PlaceAsync(manager.Items[0], new(0, 0, 1920, 1044), CancellationToken.None));
         Assert.AreEqual(0, moves);
+    }
+
+    [TestMethod]
+    public async Task TargetWindows_OnlyCloseReconnectClientOnAssignedUnlockedDesktop()
+    {
+        var manager = new Windows { Items = [Client(TargetDesktop)] };
+        var target = new TargetSessionWindows(manager, TargetDesktop, Area, () => ManagerDesktop,
+            (_, _, _) => Task.CompletedTask);
+        await target.CloseReconnectPromptAsync(manager.Items[0], CancellationToken.None);
+        Assert.AreEqual(manager.Items[0].Identity, manager.ClosedIdentity);
+
+        manager.Items = [Client(ManagerDesktop)];
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            target.CloseReconnectPromptAsync(manager.Items[0], CancellationToken.None));
+        manager.Items = [Client(TargetDesktop)];
+        manager.Environment = manager.Environment with { CanInteract = false };
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            target.CloseReconnectPromptAsync(manager.Items[0], CancellationToken.None));
     }
 
     [TestMethod]

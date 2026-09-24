@@ -27,6 +27,8 @@ public sealed class SessionCoordinatorTests
         public BoardEnvironment GetEnvironment() => Environment;
         public IReadOnlyList<SessionWindow> Enumerate() => Items.ToArray();
         public int CountVisibleTopLevelWindows(WindowIdentity identity) => VisibleWindowCount;
+        public Task CloseReconnectPromptAsync(SessionWindow window, CancellationToken ct) =>
+            throw new AssertFailedException("Unexpected reconnect-window close.");
         public PixelRect GetVisibleBounds(SessionWindow window) => new(
             window.Bounds.X + Insets.Left, window.Bounds.Y + Insets.Top,
             window.Bounds.Width - Insets.Left - Insets.Right,
