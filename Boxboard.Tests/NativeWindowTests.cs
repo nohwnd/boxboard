@@ -14,6 +14,14 @@ namespace Boxboard.Tests;
 [TestClass]
 public sealed class NativeWindowTests
 {
+    [TestMethod]
+    public void WindowsAppOkButton_ControlIdZeroIsUsable()
+    {
+        NativeSessionWindows.EnsureUsableDialogButtonId(0);
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            NativeSessionWindows.EnsureUsableDialogButtonId(-1));
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")]
     private static extern int ShowMessageBox(nint owner, string message, string caption, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]

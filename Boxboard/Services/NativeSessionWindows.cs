@@ -133,10 +133,15 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
         if (okButtons.Count != 1)
             throw new InvalidOperationException("The Windows App dialog has no unique OK button; no replacement was launched.");
         var buttonId = GetDlgCtrlID(okButtons[0]);
-        if (buttonId <= 0)
-            throw new InvalidOperationException("The Windows App OK button has no usable dialog identity.");
+        EnsureUsableDialogButtonId(buttonId);
         if (SendMessageTimeoutW(prompt, 0x0111, buttonId, okButtons[0], 0x0002, 2000, out _) == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError());
+    }
+
+    internal static void EnsureUsableDialogButtonId(int buttonId)
+    {
+        if (buttonId < 0)
+            throw new InvalidOperationException("The Windows App OK button has no usable dialog identity.");
     }
 
     private static unsafe string ReadWindowTitle(nint hwnd)
