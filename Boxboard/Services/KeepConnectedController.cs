@@ -110,11 +110,14 @@ public sealed class KeepConnectedController(
                             continue;
                         }
                         reconnectState.MissingSince = _clock.GetUtcNow().AddSeconds(-3);
+                        session.ReconnectCloseFailed = false;
                         session.Status = "Disconnected client closed; Keep connected will request a replacement.";
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _failedPromptCloses.Add(client.Identity);
+                        session.ReconnectCloseFailed = true;
+                        session.Status = "The reconnect windows could not be closed automatically. Verify in Windows App.";
                         throw;
                     }
                 }

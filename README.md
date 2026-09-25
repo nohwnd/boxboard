@@ -79,7 +79,9 @@ assignments.
   automatic requests per slot. Turn it off on a card if you want to leave
   a closed client closed. If an assigned Windows App client has one additional
   visible window in its process, Keep on closes the old client and that
-  window before requesting a replacement. Turn Keep on off to leave
+  window before requesting a replacement. If Windows App ignores the
+  dialog's close request, Boxboard dismisses its **OK** button first; it
+  never clicks **Reconnect**. Turn Keep on off to leave
   reconnect dialogs for manual handling. Windows App handles authentication
   and MFA.
 - Use the trash icon on a tile to clear its assignment. Right-click an

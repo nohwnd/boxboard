@@ -8,7 +8,7 @@
         <TextBlock DockPanel.Dock="Top" Margin="0,0,0,10" TextWrapping="Wrap"
                    Text="Live activity (last 300 entries, memory only). Move this window to your other monitor. Client-window presence does not prove an authenticated remote connection." />
         <ListBox x:Name="LogList" ItemsSource="{Binding Entries}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                 VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling">
+                 VirtualizingStackPanel.IsVirtualizing="False">
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <Grid Margin="4,5">

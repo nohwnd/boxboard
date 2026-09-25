@@ -7,6 +7,7 @@ public sealed class CellSession
 {
     public WindowIdentity? BoundWindow { get; internal set; }
     public bool ReconnectPromptSuspected { get; internal set; }
+    internal bool ReconnectCloseFailed { get; set; }
     private string _status = "No client window bound. Drag a machine here, then bind or connect.";
     internal Action<string>? Report { get; init; }
     public string Status
@@ -174,6 +175,7 @@ public sealed class SessionCoordinator(
         else
             _preservedExisting.Remove(identity);
         session.ReconnectPromptSuspected = false;
+        session.ReconnectCloseFailed = false;
         session.Failed = false;
         _failedPlacements.Remove(identity);
         session.Status = preservePosition
@@ -375,14 +377,16 @@ public sealed class SessionCoordinator(
         if (prompt is not null)
         {
             session.ReconnectPromptSuspected = true;
-            session.Status = $"Possible reconnect prompt for {machine.EffectiveName}: " +
-                $"{prompt.VisibleWindowCount} visible windows from its client process. " +
-                "Keep on may close this client and request a replacement; connection state remains unknown.";
+            if (!session.ReconnectCloseFailed)
+                session.Status = $"Possible reconnect prompt for {machine.EffectiveName}: " +
+                    $"{prompt.VisibleWindowCount} visible windows from its client process. " +
+                    "Keep on may close this client and request a replacement; connection state remains unknown.";
             return;
         }
         if (session.ReconnectPromptSuspected)
         {
             session.ReconnectPromptSuspected = false;
+            session.ReconnectCloseFailed = false;
             session.Status = "The extra client window is no longer visible. Connection state remains unknown.";
         }
         if (bounds.Width < 100 || bounds.Height < 100 || !environment.WorkArea.Contains(bounds))

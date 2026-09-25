@@ -73,8 +73,15 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
         ct.ThrowIfCancellationRequested();
         if (PostMessageW(prompt, 0x0010, 0, 0) == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError());
-        for (int attempt = 0; attempt < 50 && IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0; attempt++)
+        for (int attempt = 0; attempt < 10 && IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0; attempt++)
             await Task.Delay(100, ct);
+        if (IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            DismissWindowsAppPrompt(prompt, identity);
+            for (int attempt = 0; attempt < 50 && IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0; attempt++)
+                await Task.Delay(100, ct);
+        }
         if (IsWindow(prompt) != 0 && IsWindowVisible(prompt) != 0)
             throw new TimeoutException("Windows App did not close the reconnect prompt; no replacement was launched.");
         if (IsWindow(identity.Handle) != 0)
@@ -92,6 +99,60 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
             if (IsWindow(identity.Handle) != 0)
                 throw new TimeoutException("Windows App did not close the old client; no replacement was launched.");
         }
+    }
+
+    internal static void DismissWindowsAppPrompt(nint prompt, WindowIdentity identity)
+    {
+        if (ReadClass(prompt) != "#32770" || ReadWindowTitle(prompt) != "Windows App")
+            throw new InvalidOperationException("The extra window is not a recognized Windows App dialog.");
+        var okButtons = new List<nint>();
+        Exception? inspectionError = null;
+        EnumWindowsCallback callback = (child, _) =>
+        {
+            try
+            {
+                GetWindowThreadProcessId(child, out var processId);
+                if (processId == (uint)identity.ProcessId && IsWindowVisible(child) != 0 &&
+                    IsWindowEnabled(child) != 0 && ReadClass(child) == "Button" &&
+                    ReadButtonText(child) == "OK")
+                    okButtons.Add(child);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                inspectionError = ex;
+                return 0;
+            }
+        };
+        var result = EnumChildWindows(prompt, callback, 0);
+        GC.KeepAlive(callback);
+        if (inspectionError is not null)
+            throw new InvalidOperationException("Could not inspect the Windows App dialog buttons.", inspectionError);
+        if (result == 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        if (okButtons.Count != 1)
+            throw new InvalidOperationException("The Windows App dialog has no unique OK button; no replacement was launched.");
+        var buttonId = GetDlgCtrlID(okButtons[0]);
+        if (buttonId <= 0)
+            throw new InvalidOperationException("The Windows App OK button has no usable dialog identity.");
+        if (SendMessageTimeoutW(prompt, 0x0111, buttonId, okButtons[0], 0x0002, 2000, out _) == 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+    }
+
+    private static unsafe string ReadWindowTitle(nint hwnd)
+    {
+        var buffer = stackalloc char[256];
+        var length = GetWindowTextW(hwnd, buffer, 256);
+        return new string(buffer, 0, length);
+    }
+
+    private static unsafe string ReadButtonText(nint hwnd)
+    {
+        var buffer = stackalloc char[64];
+        buffer[0] = '\0';
+        if (SendMessageTimeoutW(hwnd, 0x000D, 64, (nint)buffer, 0x0002, 2000, out _) == 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        return new string(buffer);
     }
 
     private static IReadOnlyList<nint> VisibleTopLevelWindows(WindowIdentity identity)
@@ -218,14 +279,25 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
     private delegate int EnumWindowsCallback(nint hwnd, nint lParam);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int EnumWindows(EnumWindowsCallback callback, nint lParam);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int EnumChildWindows(nint parent, EnumWindowsCallback callback, nint lParam);
     [LibraryImport("user32.dll")]
     private static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [LibraryImport("user32.dll")]
     private static partial int IsWindowVisible(nint hwnd);
     [LibraryImport("user32.dll")]
+    private static partial int IsWindowEnabled(nint hwnd);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial int GetDlgCtrlID(nint hwnd);
+    [LibraryImport("user32.dll")]
     private static partial int IsWindow(nint hwnd);
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static unsafe partial int GetWindowTextW(nint hwnd, char* value, int capacity);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial nint SendMessageTimeoutW(nint hwnd, uint message, nint wParam, nint lParam,
+        uint flags, uint timeout, out nint result);
     [LibraryImport("dwmapi.dll")]
     private static partial int DwmGetWindowAttribute(nint hwnd, uint attribute, out NativeRect value, uint size);
     [LibraryImport("user32.dll", SetLastError = true)]

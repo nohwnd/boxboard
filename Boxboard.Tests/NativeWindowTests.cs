@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -12,6 +14,49 @@ namespace Boxboard.Tests;
 [TestClass]
 public sealed class NativeWindowTests
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")]
+    private static extern int ShowMessageBox(nint owner, string message, string caption, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]
+    private static extern nint FindWindow(string className, string title);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task KnownDialog_OkButtonDismissesPromptWithoutClickingReconnect()
+    {
+        var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+            completion.SetResult(ShowMessageBox(0, "Synthetic disconnected client.", "Windows App", 0x0001)))
+            { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        nint hwnd = 0;
+        try
+        {
+            for (int attempt = 0; attempt < 100; attempt++)
+            {
+                hwnd = FindWindow("#32770", "Windows App");
+                if (hwnd != 0)
+                    break;
+                await Task.Delay(20);
+            }
+            Assert.AreNotEqual(0, hwnd);
+            GetWindowThreadProcessId(hwnd, out var owner);
+            Assert.AreEqual((uint)Environment.ProcessId, owner);
+            NativeSessionWindows.DismissWindowsAppPrompt(hwnd,
+                new(hwnd, Environment.ProcessId, Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks));
+            Assert.AreEqual(1, await completion.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            if (hwnd != 0 && !completion.Task.IsCompleted)
+                _ = PostMessageW(hwnd, 0x0010, 0, 0);
+        }
+    }
+
     [TestMethod]
     [DoNotParallelize]
     public Task CompactWindow_TrayDirectMoveClearAndReload_UsesSavedIdentities()
@@ -115,6 +160,11 @@ public sealed class NativeWindowTests
                     Assert.IsNotEmpty(activity.Entries);
                     Assert.IsTrue(activity.Entries.Any(entry => entry.Context == "Discovery"));
                     Capture(logWindow, "08-separate-live-log");
+                    Assert.IsFalse(VirtualizingStackPanel.GetIsVirtualizing(logWindow.LogList));
+                    for (int index = 0; index < 350; index++)
+                        activity.Write("Stress", $"Event {index}");
+                    await SettleAsync(logWindow);
+                    Assert.HasCount(300, activity.Entries);
                     logWindow.Close();
                     window.Close();
                     var realWindow = new MainWindow(reopened, demo: false, store.SettingsPath);

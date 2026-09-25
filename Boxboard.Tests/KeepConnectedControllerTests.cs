@@ -311,10 +311,19 @@ public sealed class KeepConnectedControllerTests
         using var sessions = new SessionCoordinator(windows,
             (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
             _ => launches++);
+        var statusChanges = new List<string>();
+        sessions.Activity += (_, message) => statusChanges.Add(message);
         using var keep = new KeepConnectedController(windows, sessions);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             keep.TickAsync(Assignments, DemoData.Machines(), enabled: true));
-        await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        var afterFailure = statusChanges.Count;
+        for (int index = 0; index < 5; index++)
+        {
+            sessions.Observe();
+            await sessions.ArrangeAsync(Slot, Machine, true, new(20, 20, 500, 400));
+            await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
+        }
+        Assert.HasCount(afterFailure, statusChanges);
         Assert.AreEqual(1, windows.CloseAttempts);
         Assert.AreEqual(0, launches);
         keep.Reset();
