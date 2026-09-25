@@ -64,9 +64,9 @@ public partial class MainWindow : Window
             _launcher = new DevBoxLauncher(auth);
         }
         Title = demo ? "Boxboard - OFFLINE DEMO" : "Boxboard";
-        ToolTip = $"Settings: {path}";
         _log.Write("Boxboard", demo ? "Offline demo opened; no real clients will be controlled." :
             "Board opened. Keep connected may request missing assigned clients when enabled.");
+        _log.Write("Settings", $"Layout file: {path}");
         Render();
     }
 
@@ -734,19 +734,46 @@ public partial class MainWindow : Window
         if (e.LeftButton == MouseButtonState.Pressed && MachineList.SelectedItem is MachineOption machine &&
             (Math.Abs(point.X - _dragStart.X) > SystemParameters.MinimumHorizontalDragDistance ||
              Math.Abs(point.Y - _dragStart.Y) > SystemParameters.MinimumVerticalDragDistance))
-            DragDrop.DoDragDrop(MachineList, new DataObject(MachineDragFormat, machine.UniqueId), DragDropEffects.Move);
+        {
+            try { DragDrop.DoDragDrop(MachineList, new DataObject(MachineDragFormat, machine.UniqueId), DragDropEffects.Move); }
+            finally { ClearDragTargets(); }
+        }
     }
     private void Cell_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent(MachineDragFormat) ? DragDropEffects.Move : DragDropEffects.None;
+        var valid = e.Data.GetDataPresent(MachineDragFormat) &&
+            e.Data.GetData(MachineDragFormat) is string id &&
+            _board.Settings.Machines.Any(machine => SameId(machine.UniqueId, id));
+        e.Effects = valid ? DragDropEffects.Move : DragDropEffects.None;
+        if (sender is FrameworkElement { DataContext: CellViewModel cell })
+            cell.IsDragTarget = valid;
+        e.Handled = true;
+    }
+    private void Cell_DragLeave(object sender, DragEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: CellViewModel cell })
+            cell.IsDragTarget = false;
         e.Handled = true;
     }
     private async void Cell_Drop(object sender, DragEventArgs e)
     {
         e.Handled = true;
         if (sender is FrameworkElement { DataContext: CellViewModel cell })
+        {
+            cell.IsDragTarget = false;
             await AssignDroppedMachineAsync(cell.DesktopId == Guid.Empty ? null : cell.DesktopId,
                 cell.Slot.Id, e.Data);
+        }
+        else
+        {
+            _operationError = "The target slot is unavailable.";
+            ShowError();
+        }
+    }
+    private void ClearDragTargets()
+    {
+        foreach (var cell in Cards.SelectMany(card => card.Cells))
+            cell.IsDragTarget = false;
     }
     private void Cell_MouseDown(object sender, MouseButtonEventArgs e) => _dragStart = e.GetPosition(this);
     private void Cell_MouseMove(object sender, MouseEventArgs e)
@@ -757,8 +784,14 @@ public partial class MainWindow : Window
         var point = e.GetPosition(this);
         if (Math.Abs(point.X - _dragStart.X) > SystemParameters.MinimumHorizontalDragDistance ||
             Math.Abs(point.Y - _dragStart.Y) > SystemParameters.MinimumVerticalDragDistance)
-            DragDrop.DoDragDrop((DependencyObject)sender, new DataObject(MachineDragFormat, machineId),
-                DragDropEffects.Move);
+        {
+            try
+            {
+                DragDrop.DoDragDrop((DependencyObject)sender, new DataObject(MachineDragFormat, machineId),
+                    DragDropEffects.Move);
+            }
+            finally { ClearDragTargets(); }
+        }
     }
     private async void AssignSelected_Click(object sender, RoutedEventArgs e)
     {

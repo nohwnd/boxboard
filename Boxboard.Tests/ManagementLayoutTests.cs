@@ -1,4 +1,5 @@
 using Bevdox.Models;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -100,6 +101,7 @@ public sealed class ManagementLayoutTests
                 var tiles = MainWindow.Descendants<Border>(window.DesktopCards)
                     .Where(border => border.Name == "SlotTile").ToList();
                 Assert.HasCount(9, tiles);
+                Assert.IsTrue(tiles.All(tile => tile.ToolTip is null));
                 var clearButtons = MainWindow.Descendants<Button>(window.DesktopCards)
                     .Where(button => button.Name == "ClearAssignmentButton").ToList();
                 Assert.AreEqual(5, clearButtons.Count(button => button.Visibility == Visibility.Visible));
@@ -197,6 +199,83 @@ public sealed class ManagementLayoutTests
             }
             finally { window.Close(); }
         }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    [DoNotParallelize]
+    public Task EmptyButton_RoutedDrop_AssignsMachineAndHighlightsTarget(bool assignedSource)
+    {
+        return WpfTestHost.RunAsync(async () =>
+        {
+            var board = new SlotBoard(new MemoryStore(DemoData.Settings()));
+            await board.LoadAsync();
+            await board.EnsureFourCellsAsync();
+            await board.SelectDesktopAsync(Guid.NewGuid(), "Desktop 1");
+            var empty = board.CurrentSlots[3];
+            var machineId = assignedSource ? board.CurrentSlots[1].MachineId! :
+                DemoData.Machines()[3].UniqueId;
+            var window = new MainWindow(board, demo: true, "offline-layout");
+            try
+            {
+                var root = Measure(window);
+                var button = MainWindow.Descendants<Button>(window.DesktopCards)
+                    .Single(item => item.Name == "EmptyContent" &&
+                        item.DataContext is CellViewModel cell && cell.Slot.Id == empty.Id);
+                var cell = Assert.IsInstanceOfType<CellViewModel>(button.DataContext);
+                var tile = MainWindow.Descendants<Border>(window.DesktopCards)
+                    .Single(item => item.Name == "SlotTile" && ReferenceEquals(item.DataContext, cell));
+                Assert.IsTrue(button.AllowDrop);
+                Assert.AreEqual(Visibility.Visible, button.Visibility);
+                var data = new DataObject(MainWindow.MachineDragFormat, machineId);
+
+                var enter = DragEvent(button, data, DragDrop.DragEnterEvent);
+                button.RaiseEvent(enter);
+                Assert.AreEqual(DragDropEffects.Move, enter.Effects);
+                Assert.IsTrue(cell.IsDragTarget);
+                await window.Dispatcher.InvokeAsync(root.UpdateLayout, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                Assert.AreEqual(Color.FromRgb(232, 244, 253), ((SolidColorBrush)tile.Background).Color);
+                Assert.AreEqual("Drop here", button.Content);
+                if (!assignedSource)
+                    Capture(root, "compact-drag-target");
+
+                button.RaiseEvent(DragEvent(button, data, DragDrop.DragLeaveEvent));
+                Assert.IsFalse(cell.IsDragTarget);
+                var invalid = DragEvent(button, new DataObject(DataFormats.Text, "not a Dev Box"),
+                    DragDrop.DragEnterEvent);
+                button.RaiseEvent(invalid);
+                Assert.AreEqual(DragDropEffects.None, invalid.Effects);
+                Assert.IsFalse(cell.IsDragTarget);
+                button.RaiseEvent(DragEvent(button, data, DragDrop.DragEnterEvent));
+                var drop = DragEvent(button, data, DragDrop.DropEvent);
+                button.RaiseEvent(drop);
+                var started = DateTime.UtcNow;
+                while (board.CurrentSlots[3].MachineId != machineId || !window.RefreshButton.IsEnabled)
+                {
+                    if (DateTime.UtcNow - started > TimeSpan.FromSeconds(5))
+                        Assert.Fail("The drop on the empty-slot button was not saved.");
+                    await Task.Delay(15);
+                }
+                Assert.IsFalse(cell.IsDragTarget);
+                if (assignedSource)
+                    Assert.IsNull(board.CurrentSlots[1].MachineId);
+            }
+            finally { window.Close(); }
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    private static DragEventArgs DragEvent(DependencyObject target, IDataObject data, RoutedEvent routed)
+    {
+        var constructor = typeof(DragEventArgs).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(IDataObject), typeof(DragDropKeyStates), typeof(DragDropEffects),
+                typeof(DependencyObject), typeof(Point)],
+            modifiers: null) ?? throw new InvalidOperationException("The WPF drag event constructor is unavailable.");
+        var args = (DragEventArgs)constructor.Invoke(
+            [data, DragDropKeyStates.LeftMouseButton, DragDropEffects.Move, target, new Point(8, 8)]);
+        args.RoutedEvent = routed;
+        return args;
     }
 
     [TestMethod]

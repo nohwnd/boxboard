@@ -226,11 +226,11 @@
                                                 <DataTemplate>
                                                     <Border x:Name="SlotTile" Margin="0,0,7,7" CornerRadius="7"
                                                             BorderBrush="#E2E8ED" BorderThickness="1" Background="#F9FBFC"
-                                                            AllowDrop="True" DragOver="Cell_DragOver" Drop="Cell_Drop"
+                                                            AllowDrop="True" DragEnter="Cell_DragOver" DragOver="Cell_DragOver"
+                                                            DragLeave="Cell_DragLeave" Drop="Cell_Drop"
                                                             PreviewMouseLeftButtonDown="Cell_MouseDown"
                                                             PreviewMouseMove="Cell_MouseMove"
                                                             ContextMenuService.IsEnabled="{Binding IsAssigned}"
-                                                            ToolTip="{Binding Status}"
                                                             AutomationProperties.Name="{Binding Name}">
                                                         <Border.ContextMenu>
                                                             <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -264,6 +264,9 @@
                                                             </StackPanel>
                                                             <Button x:Name="EmptyContent" Content="+  Drop Dev Box"
                                                                     Click="AssignSelected_Click" Visibility="Collapsed"
+                                                                    AllowDrop="True" DragEnter="Cell_DragOver"
+                                                                    DragOver="Cell_DragOver" DragLeave="Cell_DragLeave"
+                                                                    Drop="Cell_Drop"
                                                                     Foreground="#3B596F" Background="Transparent"
                                                                     BorderThickness="0" MinHeight="24" Padding="4"
                                                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -283,6 +286,13 @@
                                                             <Setter TargetName="EmptyContent" Property="Visibility" Value="Visible" />
                                                             <Setter TargetName="ClearAssignmentButton" Property="Visibility" Value="Collapsed" />
                                                             <Setter TargetName="SlotTile" Property="BorderBrush" Value="#A6BBC9" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDragTarget}" Value="True">
+                                                            <Setter TargetName="SlotTile" Property="BorderBrush" Value="#2074B4" />
+                                                            <Setter TargetName="SlotTile" Property="BorderThickness" Value="2" />
+                                                            <Setter TargetName="SlotTile" Property="Background" Value="#E8F4FD" />
+                                                            <Setter TargetName="EmptyContent" Property="Content" Value="Drop here" />
+                                                            <Setter TargetName="EmptyContent" Property="Foreground" Value="#2074B4" />
                                                         </DataTrigger>
                                                     </DataTemplate.Triggers>
                                                 </DataTemplate>
