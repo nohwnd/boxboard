@@ -81,7 +81,7 @@ public sealed class SlotBoardTests
     }
 
     [TestMethod]
-    public async Task Assign_ConfirmedMove_ClearsSourceAndReplacesTargetInOneSave()
+    public async Task Assign_OccupiedSourceAndTargetSwapInOneSave()
     {
         var store = new MemoryStore();
         var board = new SlotBoard(store);
@@ -94,11 +94,27 @@ public sealed class SlotBoardTests
 
         Assert.IsTrue(changed);
         Assert.AreEqual(new MoveRequest("azdo1", "Slot 1", "Slot 2", "azdo2"), prompt);
-        Assert.IsNull(store.Saved.Slots[0].MachineId);
+        Assert.AreEqual(target.MachineId, store.Saved.Slots[0].MachineId);
         Assert.AreEqual(source.MachineId, store.Saved.Slots[1].MachineId);
         Assert.AreEqual(1, store.SaveCount);
         Assert.AreEqual("azdo1 (Assigned to Slot 2)", board.Options.Single(m => m.UniqueId == source.MachineId).Label);
-        Assert.AreEqual("azdo2", board.Options.Single(m => m.UniqueId == target.MachineId).Label);
+        Assert.AreEqual("azdo2 (Assigned to Slot 1)", board.Options.Single(m => m.UniqueId == target.MachineId).Label);
+    }
+
+    [TestMethod]
+    public async Task Assign_UnassignedInventoryMachineStillReplacesOccupiedSlot()
+    {
+        var board = new SlotBoard(new MemoryStore());
+        await board.LoadAsync();
+        var original = board.CurrentSlots[0].MachineId;
+        var freeMachine = DemoData.Machines()[3];
+
+        Assert.IsTrue(await board.AssignAsync(board.CurrentSlots[0].Id, freeMachine.UniqueId,
+            _ => throw new AssertFailedException("An unassigned machine has no source slot to swap.")));
+
+        Assert.AreEqual(freeMachine.UniqueId, board.CurrentSlots[0].MachineId);
+        Assert.AreEqual("azdo1", board.Options.Single(option => option.UniqueId == original).Label);
+        Assert.AreEqual(DemoData.Machines()[1].UniqueId, board.CurrentSlots[1].MachineId);
     }
 
     [TestMethod]
@@ -456,6 +472,39 @@ public sealed class SlotBoardTests
         Assert.AreEqual(WindowLayoutMode.SideBySide, restarted.GetLayoutMode(secondary));
         Assert.AreEqual(source.MachineId, restarted.GetVisibleSlots(secondary)[0].MachineId);
         Assert.IsNull(restarted.GetSlots(primary)[0].MachineId);
+    }
+
+    [TestMethod]
+    public async Task OccupiedSlotsAcrossDesktops_SwapAndSurviveReload()
+    {
+        var store = new MemoryStore();
+        var board = new SlotBoard(store);
+        await board.LoadAsync();
+        await board.EnsureFourCellsAsync();
+        var primary = Guid.NewGuid();
+        var secondary = Guid.NewGuid();
+        await board.SelectDesktopAsync(primary, "Desktop 1");
+        await board.SelectDesktopAsync(secondary, "Desktop 2");
+        var source = board.GetSlots(primary)[0];
+        var target = board.GetSlots(secondary)[0];
+        var secondMachine = DemoData.Machines()[2];
+        await board.AssignAsync(secondary, target.Id, secondMachine.UniqueId, _ => true);
+        var saves = store.SaveCount;
+
+        Assert.IsTrue(await board.AssignAsync(secondary, target.Id, source.MachineId!, _ => true));
+        Assert.AreEqual(saves + 1, store.SaveCount);
+        Assert.AreEqual(secondMachine.UniqueId, board.GetSlots(primary)[0].MachineId);
+        Assert.AreEqual(source.MachineId, board.GetSlots(secondary)[0].MachineId);
+        Assert.AreEqual(source.Id, board.GetSlots(primary)[0].Id);
+        Assert.AreEqual(target.Id, board.GetSlots(secondary)[0].Id);
+        Assert.IsFalse(board.Options.Any(option =>
+            (option.UniqueId == source.MachineId || option.UniqueId == secondMachine.UniqueId) &&
+            !option.Label.Contains("Assigned to", StringComparison.Ordinal)));
+
+        var restarted = new SlotBoard(store);
+        await restarted.LoadAsync();
+        Assert.AreEqual(secondMachine.UniqueId, restarted.GetSlots(primary)[0].MachineId);
+        Assert.AreEqual(source.MachineId, restarted.GetSlots(secondary)[0].MachineId);
     }
 
     [TestMethod]

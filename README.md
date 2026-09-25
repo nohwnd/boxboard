@@ -58,8 +58,9 @@ assignments.
 
 - Every virtual desktop has a card. Drag an unassigned Dev Box from the top
   tray to a slot, or drag an assigned tile to another slot or desktop.
-  A move updates both slots immediately; a replaced Dev Box returns to the
-  unassigned tray without closing its client.
+  Dragging an assigned tile onto another assigned tile swaps them immediately.
+  Dropping an unassigned tray entry onto an occupied slot replaces its Dev Box,
+  returning the replaced one to the tray without closing its client.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
   using the graphical preview cards on each desktop. One window fills the
   monitor's usable work area like a maximized window; Windows App keeps its
@@ -70,7 +71,9 @@ assignments.
 - Assignment changes and layout choices take effect automatically.
   **Re-apply** explicitly snaps all visible assigned windows back to their
   slots, including windows you have manually resized, and retries missing
-  clients. Otherwise, Boxboard leaves manual window positions alone.
+  clients. For a newly opened Windows App client, Boxboard can correct late
+  sizing changes during its first 15 seconds; it leaves later manual window
+  positions alone.
 - **Keep on** is enabled by default for each desktop. While Boxboard runs,
   it can request a missing assigned client again, with a limit of three
   automatic requests per slot. Turn it off on a card if you want to leave

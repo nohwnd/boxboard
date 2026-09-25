@@ -47,6 +47,8 @@ public sealed class SessionCoordinator(
     private IReadOnlyList<SessionWindow> _observed = [];
     private readonly Dictionary<WindowIdentity, PixelRect> _placements = [];
     private readonly Dictionary<WindowIdentity, PlacementFailure> _failedPlacements = [];
+    private readonly Dictionary<WindowIdentity, DateTimeOffset> _startupPlacements = [];
+    private readonly Dictionary<WindowIdentity, DateTimeOffset> _nextStartupCorrection = [];
     private readonly HashSet<WindowIdentity> _preservedExisting = [];
     private readonly HashSet<WindowIdentity> _manuallyPositioned = [];
     public event Action<SlotAssignment, string>? Activity;
@@ -63,6 +65,8 @@ public sealed class SessionCoordinator(
     {
         _placements.Clear();
         _failedPlacements.Clear();
+        _startupPlacements.Clear();
+        _nextStartupCorrection.Clear();
         _preservedExisting.Clear();
         _manuallyPositioned.Clear();
     }
@@ -77,6 +81,8 @@ public sealed class SessionCoordinator(
             {
                 _preservedExisting.Remove(oldWindow);
                 _manuallyPositioned.Remove(oldWindow);
+                _startupPlacements.Remove(oldWindow);
+                _nextStartupCorrection.Remove(oldWindow);
             }
             session.Request?.Cancel();
             session.Request?.Dispose();
@@ -159,6 +165,8 @@ public sealed class SessionCoordinator(
         {
             _preservedExisting.Remove(oldWindow);
             _manuallyPositioned.Remove(oldWindow);
+            _startupPlacements.Remove(oldWindow);
+            _nextStartupCorrection.Remove(oldWindow);
         }
         session.BoundWindow = identity;
         if (preservePosition)
@@ -422,6 +430,8 @@ public sealed class SessionCoordinator(
             {
                 session.BoundWindow = candidate.Identity;
                 bound = candidate;
+                if (requestedReplacement)
+                    _startupPlacements[candidate.Identity] = _clock.GetUtcNow().AddSeconds(15);
             }
         }
         if (bound is null)
@@ -463,22 +473,56 @@ public sealed class SessionCoordinator(
             session.Status = "Client was moved manually. Its position is retained until Re-apply.";
             return;
         }
+        var maxPlacementAttempts = _startupPlacements.ContainsKey(bound.Identity) ? 5 : 3;
+        var attemptsLabel = maxPlacementAttempts == 3 ? "three" : "five";
+        if (_failedPlacements.TryGetValue(bound.Identity, out var priorFailure))
+        {
+            if (priorFailure.Bounds != bounds)
+                _failedPlacements.Remove(bound.Identity);
+            else if (priorFailure.Attempts >= maxPlacementAttempts)
+            {
+                if (session.Failed)
+                    return;
+                session.Connecting = false;
+                session.Deadline = null;
+                session.Failed = true;
+                session.Status = $"Window placement failed after {attemptsLabel} attempts. Use Re-apply to retry.";
+                throw new WindowPlacementRejectedException(session.Status);
+            }
+            else if (_clock.GetUtcNow() < priorFailure.NextRetry)
+                return;
+        }
         try
         {
-            _failedPlacements.TryGetValue(bound.Identity, out var failure);
-            if (failure is not null)
+            if (_placements.TryGetValue(bound.Identity, out var previous) && previous == bounds)
             {
-                if (failure.Bounds != bounds)
-                    _failedPlacements.Remove(bound.Identity);
-                else if (failure.Attempts >= 3 || _clock.GetUtcNow() < failure.NextRetry)
-                    return;
-            }
-            if (_placements.TryGetValue(bound.Identity, out var previous) && previous == bounds &&
-                windows.GetVisibleBounds(bound) != bounds)
-            {
-                _manuallyPositioned.Add(bound.Identity);
-                session.Status = "Client was moved manually. Its position is retained until Re-apply.";
-                return;
+                var now = _clock.GetUtcNow();
+                if (windows.GetVisibleBounds(bound) != bounds)
+                {
+                    if (_startupPlacements.TryGetValue(bound.Identity, out var settlingUntil) &&
+                        now < settlingUntil)
+                    {
+                        if (_nextStartupCorrection.TryGetValue(bound.Identity, out var next) && now < next)
+                            return;
+                        _nextStartupCorrection[bound.Identity] = now.AddSeconds(1);
+                        _placements.Remove(bound.Identity);
+                        session.Status = "Windows App changed the new client's size during startup; restoring its slot.";
+                    }
+                    else
+                    {
+                        _startupPlacements.Remove(bound.Identity);
+                        _nextStartupCorrection.Remove(bound.Identity);
+                        _manuallyPositioned.Add(bound.Identity);
+                        session.Status = "Client was moved manually. Its position is retained until Re-apply.";
+                        return;
+                    }
+                }
+                else if (_startupPlacements.TryGetValue(bound.Identity, out var expiresAt) &&
+                    now >= expiresAt)
+                {
+                    _startupPlacements.Remove(bound.Identity);
+                    _nextStartupCorrection.Remove(bound.Identity);
+                }
             }
             if (!_placements.TryGetValue(bound.Identity, out previous) || previous != bounds)
             {
@@ -499,11 +543,11 @@ public sealed class SessionCoordinator(
             var retryDelay = attempts == 1 ? 2 : 4;
             _failedPlacements[bound.Identity] = new(bounds, attempts,
                 _clock.GetUtcNow().AddSeconds(retryDelay));
-            session.Status = attempts < 3
-                ? $"Windows App did not accept the initial cell size (attempt {attempts}/3). " +
+            session.Status = attempts < maxPlacementAttempts
+                ? $"Windows App did not accept the initial cell size (attempt {attempts}/{maxPlacementAttempts}). " +
                     $"Retrying in {retryDelay} seconds; no new connection will be launched. {ex.Message}"
-                : $"Window placement failed after three attempts. Use Re-apply to retry. {ex.Message}";
-            if (attempts >= 3)
+                : $"Window placement failed after {attemptsLabel} attempts. Use Re-apply to retry. {ex.Message}";
+            if (attempts >= maxPlacementAttempts)
             {
                 session.Connecting = false;
                 session.Deadline = null;

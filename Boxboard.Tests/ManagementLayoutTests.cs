@@ -176,7 +176,7 @@ public sealed class ManagementLayoutTests
 
     [TestMethod]
     [DoNotParallelize]
-    public Task AssignedTile_DropMovesImmediatelyAndReturnsReplacedMachineToTray()
+    public Task AssignedTile_DropSwapsOccupiedSlotsImmediately()
     {
         return WpfTestHost.RunAsync(async () =>
         {
@@ -191,9 +191,9 @@ public sealed class ManagementLayoutTests
                 await window.AssignDroppedMachineAsync(original[0].Id,
                     new DataObject(MainWindow.MachineDragFormat, original[1].MachineId!));
                 Assert.AreEqual(original[1].MachineId, board.CurrentSlots[0].MachineId);
-                Assert.IsNull(board.CurrentSlots[1].MachineId);
-                Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>()
-                    .Any(machine => machine.Label == "azdo1"));
+                Assert.AreEqual(original[0].MachineId, board.CurrentSlots[1].MachineId);
+                Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>()
+                    .Any(machine => machine.Label is "azdo1" or "azdo2"));
             }
             finally { window.Close(); }
         }, TimeSpan.FromSeconds(20));

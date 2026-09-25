@@ -55,9 +55,9 @@ public sealed class NativeWindowTests
                     await window.AssignDroppedMachineAsync(original[0].Id, data);
                     await SettleAsync(window);
                     Assert.AreEqual(original[1].MachineId, board.Settings.Slots[0].MachineId);
-                    Assert.IsNull(board.Settings.Slots[1].MachineId);
+                    Assert.AreEqual(original[0].MachineId, board.Settings.Slots[1].MachineId);
                     Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label.StartsWith("azdo2")));
-                    Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label == "azdo1"));
+                    Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label == "azdo1"));
                     Capture(window, "03-direct-assignment-move");
 
                     await window.AssignDroppedMachineAsync(original[3].Id,

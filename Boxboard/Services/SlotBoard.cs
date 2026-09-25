@@ -228,9 +228,10 @@ public sealed class SlotBoard(ISettingsStore store)
                 target.MachineId is null ? null : GetMachine(target.MachineId).EffectiveName)))
                 return false;
 
+            var displacedMachineId = source is null ? null : target.MachineId;
             SlotAssignment SetAssignment(SlotAssignment slot) => slot.Id == target.Id
                 ? slot with { MachineId = machine.UniqueId }
-                : slot.Id == source?.Id ? slot with { MachineId = null } : slot;
+                : slot.Id == source?.Id ? slot with { MachineId = displacedMachineId } : slot;
             await CommitAsync(Settings with
             {
                 Slots = Settings.Slots.Select(SetAssignment).ToList(),

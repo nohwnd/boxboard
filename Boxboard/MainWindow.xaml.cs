@@ -664,6 +664,10 @@ public partial class MainWindow : Window
         var source = _board.Layouts.SelectMany(layout => _board.GetSlots(layout.DesktopId)
             .Select(assignment => (layout.DesktopId, Slot: assignment)))
             .FirstOrDefault(entry => SameId(entry.Slot.MachineId, machine));
+        var previousTarget = desktopId is { } targetId
+            ? _board.GetVisibleSlots(targetId).Single(item => item.Id == slot)
+            : _board.VisibleSlots.Single(item => item.Id == slot);
+        var displacedId = source.Slot is null ? null : previousTarget.MachineId;
         var changed = desktopId is { } id
             ? await _board.AssignAsync(id, slot, machine, _ => true, _lifetime.Token)
             : await _board.AssignAsync(slot, machine, _ => true, _lifetime.Token);
@@ -673,32 +677,55 @@ public partial class MainWindow : Window
                     ? $"{_board.Layouts.Single(layout => layout.DesktopId == selected).Name} / " +
                       _board.GetSlots(selected).Single(s => s.Id == slot).Name
                     : _board.CurrentSlots.Single(s => s.Id == slot).Name,
-                $"Assigned {_board.GetMachine(machine).EffectiveName}; stable identity saved.");
+                displacedId is null ? $"Assigned {_board.GetMachine(machine).EffectiveName}; stable identity saved." :
+                    $"Swapped {_board.GetMachine(machine).EffectiveName} and " +
+                    $"{_board.GetMachine(displacedId).EffectiveName}; both assignments saved.");
             if (_demo)
                 return;
             if (desktopId is not { } target || !_layouts.TryGetValue(target, out var runtime))
                 throw new InvalidOperationException("Assignment saved, but its desktop is unavailable for automatic placement.");
             if (source.Slot is not null && _layouts.TryGetValue(source.DesktopId, out var oldRuntime))
                 oldRuntime.Sessions.For(_board.GetSlots(source.DesktopId).Single(s => s.Id == source.Slot.Id));
-            if (runtime.PendingApply)
-            {
-                await ApplyVisibleLayoutAsync(target, runtime);
-                return;
-            }
             var assigned = _board.GetVisibleSlots(target).Single(s => s.Id == slot);
-            var instance = _board.GetMachine(machine);
-            var result = await runtime.Sessions.ApplyAssignedSlotAsync(assigned, instance,
-                _board.Settings.Machines, _lifetime.Token);
-            runtime.Sessions.Observe();
-            var index = _board.GetVisibleSlots(target).ToList().FindIndex(s => s.Id == slot);
-            var bounds = WindowLayoutGeometry.Divide(runtime.Windows.GetEnvironment().WorkArea,
-                _board.GetLayoutMode(target))[index];
-            await runtime.Sessions.ArrangeAsync(assigned, instance, NameIsUnique(instance.OriginalName),
-                bounds, _lifetime.Token);
-            _log.Write("Window integration", $"Automatically placed {instance.EffectiveName}: " +
-                $"{result.Moved} window(s) moved, {result.ConnectionRequests} connection(s) requested.");
+            runtime.Sessions.For(assigned);
+            var appliedWholeTarget = runtime.PendingApply;
+            if (appliedWholeTarget)
+                await ApplyVisibleLayoutAsync(target, runtime);
+            else
+                await ApplyAssignedSlotAsync(target, runtime, assigned);
+            if (displacedId is not null && source.Slot is not null)
+            {
+                if (!_layouts.TryGetValue(source.DesktopId, out var sourceRuntime))
+                    throw new InvalidOperationException("The swap was saved, but its source desktop is unavailable for placement.");
+                if (source.DesktopId == target && appliedWholeTarget)
+                    return;
+                var swappedSource = _board.GetVisibleSlots(source.DesktopId)
+                    .Single(item => item.Id == source.Slot.Id);
+                if (sourceRuntime.PendingApply)
+                    await ApplyVisibleLayoutAsync(source.DesktopId, sourceRuntime);
+                else
+                    await ApplyAssignedSlotAsync(source.DesktopId, sourceRuntime, swappedSource);
+            }
         }
     });
+
+    private async Task ApplyAssignedSlotAsync(Guid desktopId, LayoutRuntime runtime, SlotAssignment slot)
+    {
+        var machine = _board.GetMachine(slot.MachineId ??
+            throw new InvalidOperationException("The selected slot no longer has an assigned Dev Box."));
+        var result = await runtime.Sessions.ApplyAssignedSlotAsync(slot, machine,
+            _board.Settings.Machines, _lifetime.Token);
+        runtime.Sessions.Observe();
+        var index = _board.GetVisibleSlots(desktopId).ToList().FindIndex(item => item.Id == slot.Id);
+        if (index < 0)
+            throw new InvalidOperationException("The assigned slot is outside the selected layout.");
+        var bounds = WindowLayoutGeometry.Divide(runtime.Windows.GetEnvironment().WorkArea,
+            _board.GetLayoutMode(desktopId))[index];
+        await runtime.Sessions.ArrangeAsync(slot, machine, NameIsUnique(machine.OriginalName),
+            bounds, _lifetime.Token);
+        _log.Write("Window integration", $"Automatically placed {machine.EffectiveName}: " +
+            $"{result.Moved} window(s) moved, {result.ConnectionRequests} connection(s) requested.");
+    }
 
     private void MachineList_MouseDown(object sender, MouseButtonEventArgs e) => _dragStart = e.GetPosition(this);
     private void MachineList_MouseMove(object sender, MouseEventArgs e)

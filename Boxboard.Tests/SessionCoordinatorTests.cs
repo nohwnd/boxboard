@@ -290,6 +290,38 @@ public sealed class SessionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task SwappedAssignedSlots_RebindAndArrangeBothExistingClientsWithoutLaunching()
+    {
+        var secondMachine = DemoData.Machines()[1];
+        var secondSlot = new SlotAssignment(Guid.NewGuid(), 2, secondMachine.UniqueId);
+        var first = Window();
+        var second = Window(2, 20) with { Title = secondMachine.OriginalName };
+        var windows = new Windows { Items = [first, second] };
+        using var coordinator = new SessionCoordinator(windows,
+            (_, _) => throw new AssertFailedException("Swapping existing clients must not fetch a connection URL."),
+            _ => Assert.Fail("Swapping existing clients must not start a new session."),
+            moveToDesktop: (_, _, _) => Assert.Fail("Both clients are on the same desktop."));
+        coordinator.Bind(Slot, Machine, first.Identity);
+        coordinator.Bind(secondSlot, secondMachine, second.Identity);
+        var newSource = Slot with { MachineId = secondMachine.UniqueId };
+        var newTarget = secondSlot with { MachineId = Machine.UniqueId };
+        coordinator.For(newSource);
+        coordinator.For(newTarget);
+
+        await coordinator.ApplyAssignedSlotAsync(newTarget, Machine, DemoData.Machines());
+        coordinator.Observe();
+        var targetBounds = new PixelRect(600, 20, 500, 400);
+        await coordinator.ArrangeAsync(newTarget, Machine, true, targetBounds);
+        await coordinator.ApplyAssignedSlotAsync(newSource, secondMachine, DemoData.Machines());
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(newSource, secondMachine, true, Cell);
+
+        Assert.HasCount(2, windows.Moves);
+        Assert.AreEqual((first.Identity, targetBounds), windows.Moves[0]);
+        Assert.AreEqual((second.Identity, Cell), windows.Moves[1]);
+    }
+
+    [TestMethod]
     public async Task ApplyLayout_AmbiguousClientAbortsBeforeBindingOtherClients()
     {
         var secondMachine = DemoData.Machines()[1];
@@ -424,6 +456,96 @@ public sealed class SessionCoordinatorTests
         coordinator.Observe();
         await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
         Assert.AreEqual(3, windows.PlacementAttempts);
+    }
+
+    [TestMethod]
+    public async Task NewClient_LateStartupResizeIsCorrectedButLaterManualResizeIsPreserved()
+    {
+        var windows = new Windows();
+        var clock = new Clock();
+        int launches = 0;
+        using var coordinator = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++, clock);
+        await coordinator.ConnectAsync(Slot, Machine, nameIsUnique: true);
+        windows.Items = [Window(55, 99, 500)];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.HasCount(1, windows.Moves);
+
+        clock.Now += TimeSpan.FromMilliseconds(700);
+        windows.Items = [windows.Items[0] with { Bounds = new(0, 0, 1920, 1080) }];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.HasCount(2, windows.Moves);
+        Assert.AreEqual(Cell, windows.Items[0].Bounds);
+        Assert.AreEqual(1, launches);
+
+        clock.Now += TimeSpan.FromSeconds(16);
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        windows.Items = [windows.Items[0] with { Bounds = new(40, 40, 700, 500) }];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.HasCount(2, windows.Moves);
+        Assert.AreEqual(new PixelRect(40, 40, 700, 500), windows.Items[0].Bounds);
+        Assert.Contains("moved manually", coordinator.For(Slot).Status);
+    }
+
+    [TestMethod]
+    public async Task NewClient_InitialSizeRejectionCanSettleOnFourthBoundedAttempt()
+    {
+        var windows = new Windows { RejectedPlacements = 3 };
+        var clock = new Clock();
+        int launches = 0;
+        using var coordinator = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++, clock);
+        await coordinator.ConnectAsync(Slot, Machine, nameIsUnique: true);
+        windows.Items = [Window(55, 99, 500)];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        clock.Now += TimeSpan.FromSeconds(2);
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        clock.Now += TimeSpan.FromSeconds(4);
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.Contains("attempt 3/5", coordinator.For(Slot).Status);
+        clock.Now += TimeSpan.FromSeconds(4);
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.AreEqual(4, windows.PlacementAttempts);
+        Assert.AreEqual(Cell, windows.Moves.Single().Bounds);
+        Assert.AreEqual(1, launches);
+        Assert.IsFalse(coordinator.For(Slot).Failed);
+    }
+
+    [TestMethod]
+    public async Task NewClient_FiveRejectedSizesStopWithoutAnotherLaunch()
+    {
+        var windows = new Windows { RejectedPlacements = 5 };
+        var clock = new Clock();
+        int launches = 0;
+        using var coordinator = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++, clock);
+        await coordinator.ConnectAsync(Slot, Machine, nameIsUnique: true);
+        windows.Items = [Window(55, 99, 500)];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        foreach (var delay in new[] { 2, 4, 4 })
+        {
+            clock.Now += TimeSpan.FromSeconds(delay);
+            await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        }
+        clock.Now += TimeSpan.FromSeconds(4);
+        await Assert.ThrowsExactlyAsync<WindowPlacementRejectedException>(() =>
+            coordinator.ArrangeAsync(Slot, Machine, true, Cell));
+        Assert.AreEqual(5, windows.PlacementAttempts);
+        Assert.Contains("failed after five attempts", coordinator.For(Slot).Status);
+        Assert.IsTrue(coordinator.For(Slot).Failed);
+        Assert.AreEqual(1, launches);
+        clock.Now += TimeSpan.FromMinutes(1);
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.AreEqual(5, windows.PlacementAttempts);
     }
 
     [TestMethod]
