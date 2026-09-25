@@ -19,6 +19,12 @@ public sealed class NativeWindowTests
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]
     private static extern nint FindWindow(string className, string title);
     [DllImport("user32.dll")]
+    private static extern nint GetDlgItem(nint hwnd, int controlId);
+    [DllImport("user32.dll")]
+    private static extern int IsWindowVisible(nint hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
+    private static extern int ReadWindowText(nint hwnd, [Out] char[] text, int capacity);
+    [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
@@ -33,17 +39,37 @@ public sealed class NativeWindowTests
             { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        nint hwnd = 0;
+        nint hwnd = 0, ok = 0;
+        bool buttonReady = false;
         try
         {
             for (int attempt = 0; attempt < 100; attempt++)
             {
                 hwnd = FindWindow("#32770", "Windows App");
                 if (hwnd != 0)
-                    break;
+                {
+                    GetWindowThreadProcessId(hwnd, out var processId);
+                    if (processId == (uint)Environment.ProcessId)
+                    {
+                        ok = GetDlgItem(hwnd, 1);
+                        if (ok != 0 && IsWindowVisible(ok) != 0)
+                        {
+                            var label = new char[16];
+                            var length = ReadWindowText(ok, label, label.Length);
+                            if (length == 2 && new string(label, 0, length) == "OK")
+                            {
+                                buttonReady = true;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                        hwnd = 0;
+                }
                 await Task.Delay(20);
             }
             Assert.AreNotEqual(0, hwnd);
+            Assert.IsTrue(buttonReady, "The synthetic OK button did not finish initializing.");
             GetWindowThreadProcessId(hwnd, out var owner);
             Assert.AreEqual((uint)Environment.ProcessId, owner);
             NativeSessionWindows.DismissWindowsAppPrompt(hwnd,
