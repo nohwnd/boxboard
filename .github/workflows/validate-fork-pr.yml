@@ -38,9 +38,26 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: ${{ steps.pr.outputs.repository }}
-          ref: ${{ steps.pr.outputs.sha }}
           persist-credentials: false
+
+      - name: Fetch public fork head without credentials
+        shell: pwsh
+        env:
+          HEAD_REPOSITORY: ${{ steps.pr.outputs.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          git fetch --no-tags --depth=1 "https://github.com/$env:HEAD_REPOSITORY.git" $env:HEAD_SHA
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not fetch the pull request commit from its public fork.'
+          }
+          $fetched = git rev-parse FETCH_HEAD
+          if ($fetched -ne $env:HEAD_SHA) {
+            throw "The fetched commit differs from the selected pull request head."
+          }
+          git checkout --detach $env:HEAD_SHA
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not check out the verified pull request commit.'
+          }
 
       - uses: actions/setup-dotnet@v4
         with:
