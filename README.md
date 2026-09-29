@@ -16,10 +16,12 @@ without Boxboard moving it back.
    [Windows App](https://learn.microsoft.com/en-us/windows-app/overview).
    Managing clients across multiple virtual desktops requires Windows 11
    build 26100 or later.
-2. Download `Boxboard.exe`, `LICENSE.txt` and `THIRD_PARTY_LICENSE.txt`
-   from the [latest release](https://github.com/nohwnd/boxboard/releases/latest).
-   Keep the three files together in a folder of your choice. The executable
-   is self-contained: no .NET SDK, administrator access or installer is needed.
+2. Download `Boxboard-win-x64.zip` from the
+   [latest release](https://github.com/nohwnd/boxboard/releases/latest) and
+   extract its three files into a folder of your choice. Alternatively,
+   download `Boxboard.exe`, `LICENSE.txt` and `THIRD_PARTY_LICENSE.txt`
+   separately and keep them together. The executable is self-contained:
+   no .NET SDK, administrator access or installer is needed.
 3. Run `Boxboard.exe`. Click **Refresh** to find your Dev Boxes; Microsoft
    sign-in may be required. Boxboard saves assignments in
    `%LOCALAPPDATA%\Boxboard\settings.json`. The first launch has no
