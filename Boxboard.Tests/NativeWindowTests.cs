@@ -14,6 +14,13 @@ namespace Boxboard.Tests;
 [TestClass]
 public sealed class NativeWindowTests
 {
+    /// <summary>Keeps the demo board's card count independent of the host's real monitors.</summary>
+    private sealed class OneMonitor : IMonitors
+    {
+        public IReadOnlyList<MonitorInfo> GetMonitors() =>
+            [new(@"\\.\DISPLAY1", 1, new(0, 0, 2560, 1440), new(0, 0, 2560, 1400), true)];
+    }
+
     [TestMethod]
     public void WindowsAppOkButton_ControlIdZeroIsUsable()
     {
@@ -106,11 +113,14 @@ public sealed class NativeWindowTests
                     var board = new SlotBoard(store);
                     await board.LoadAsync();
                     await board.EnsureFourCellsAsync();
-                    window = new MainWindow(board, demo: true, store.SettingsPath) { ShowActivated = false };
+                    window = new MainWindow(board, demo: true, store.SettingsPath, new OneMonitor())
+                        { ShowActivated = false };
                     window.Show();
                     await WaitForAsync(() => board.DiscoveryVerified && window.RefreshButton.IsEnabled);
                     await SettleAsync(window);
-                    Assert.HasCount(4, window.Cells);
+                    // Two demo desktops on one monitor: one card each, four slots per card.
+                    Assert.HasCount(2, window.Cards);
+                    Assert.HasCount(8, window.Cells);
                     Assert.HasCount(2, window.MachineList.Items);
                     Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label == "aitestagent"));
                     Assert.IsFalse(window.MachineList.Items.Cast<MachineOption>().Any(m => m.Label.StartsWith("azdo2")));
@@ -161,7 +171,8 @@ public sealed class NativeWindowTests
                     var reopened = new SlotBoard(store);
                     await reopened.LoadAsync();
                     await reopened.EnsureFourCellsAsync();
-                    window = new MainWindow(reopened, demo: true, store.SettingsPath) { ShowActivated = false };
+                    window = new MainWindow(reopened, demo: true, store.SettingsPath, new OneMonitor())
+                        { ShowActivated = false };
                     window.Show();
                     await WaitForAsync(() => reopened.DiscoveryVerified && window.RefreshButton.IsEnabled);
                     await SettleAsync(window);
@@ -218,7 +229,8 @@ public sealed class NativeWindowTests
     private static void VerifyEqualViewports(MainWindow window)
     {
         var ports = MainWindow.Descendants<Border>(window.DesktopCards).Where(b => b.Name == "SlotTile").ToList();
-        Assert.HasCount(4, ports);
+        Assert.HasCount(window.Cells.Count, ports);
+        Assert.IsNotEmpty(ports);
         Assert.IsLessThanOrEqualTo(1.0, ports.Max(p => p.ActualWidth) - ports.Min(p => p.ActualWidth));
         Assert.IsLessThanOrEqualTo(1.0, ports.Max(p => p.ActualHeight) - ports.Min(p => p.ActualHeight));
         Assert.IsTrue(ports.All(p => p.ActualWidth >= 100 && p.ActualHeight >= 50));

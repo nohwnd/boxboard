@@ -36,7 +36,7 @@ public sealed class TargetSessionWindowsTests
     {
         var manager = new Windows { Items = [Client(TargetDesktop)] };
         var moves = new List<PixelRect>();
-        var target = new TargetSessionWindows(manager, TargetDesktop, Area, () => ManagerDesktop,
+        var target = new TargetSessionWindows(manager, TargetDesktop, () => Area, () => ManagerDesktop,
             (window, bounds, _) =>
             {
                 moves.Add(bounds);
@@ -54,7 +54,7 @@ public sealed class TargetSessionWindowsTests
     {
         var manager = new Windows { Items = [Client(ManagerDesktop)] };
         int moves = 0;
-        var target = new TargetSessionWindows(manager, TargetDesktop, Area, () => ManagerDesktop,
+        var target = new TargetSessionWindows(manager, TargetDesktop, () => Area, () => ManagerDesktop,
             (_, _, _) => { moves++; return Task.CompletedTask; });
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             target.PlaceAsync(manager.Items[0], new(0, 0, 1920, 1044), CancellationToken.None));
@@ -71,7 +71,7 @@ public sealed class TargetSessionWindowsTests
     public async Task TargetWindows_OnlyCloseReconnectClientOnAssignedUnlockedDesktop()
     {
         var manager = new Windows { Items = [Client(TargetDesktop)] };
-        var target = new TargetSessionWindows(manager, TargetDesktop, Area, () => ManagerDesktop,
+        var target = new TargetSessionWindows(manager, TargetDesktop, () => Area, () => ManagerDesktop,
             (_, _, _) => Task.CompletedTask);
         await target.CloseReconnectPromptAsync(manager.Items[0], CancellationToken.None);
         Assert.AreEqual(manager.Items[0].Identity, manager.ClosedIdentity);
@@ -86,10 +86,31 @@ public sealed class TargetSessionWindowsTests
     }
 
     [TestMethod]
+    public async Task TargetWindows_FollowsAWorkAreaThatChangesWhileTheLayoutIsAlive()
+    {
+        var manager = new Windows { Items = [Client(TargetDesktop)] };
+        var area = Area;
+        var moves = new List<PixelRect>();
+        var target = new TargetSessionWindows(manager, TargetDesktop, () => area, () => ManagerDesktop,
+            (_, bounds, _) => { moves.Add(bounds); return Task.CompletedTask; });
+        Assert.AreEqual(Area, target.GetEnvironment().WorkArea);
+
+        // The monitor drops to a lower resolution, as it does when scaling changes or a laptop is docked.
+        area = new PixelRect(0, 0, 1920, 1040);
+        Assert.AreEqual(area, target.GetEnvironment().WorkArea);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            target.PlaceAsync(manager.Items[0], new(0, 0, 3840, 1044), CancellationToken.None));
+        Assert.IsEmpty(moves);
+
+        await target.PlaceAsync(manager.Items[0], new(0, 0, 960, 1040), CancellationToken.None);
+        Assert.AreEqual(new PixelRect(0, 0, 960, 1040), moves.Single());
+    }
+
+    [TestMethod]
     public void TargetWindows_SameDesktopUsesManagerCurrentStateWithoutPrivateLookup()
     {
         var manager = new Windows();
-        var target = new TargetSessionWindows(manager, ManagerDesktop, Area,
+        var target = new TargetSessionWindows(manager, ManagerDesktop, () => Area,
             () => throw new AssertFailedException("Same-desktop layout should use the public manager state."),
             (_, _, _) => Task.CompletedTask);
         Assert.IsTrue(target.GetEnvironment().IsCurrentDesktop);

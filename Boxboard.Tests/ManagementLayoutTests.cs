@@ -97,7 +97,8 @@ public sealed class ManagementLayoutTests
                     machine.Label is not ("azdo1" or "azdo2" or "azdo3" or "aitestagent" or "offline-box")));
                 Assert.AreEqual(680, window.Width);
                 Assert.IsTrue(root.ActualHeight >= window.MinHeight &&
-                    root.ActualHeight <= window.MaxHeight);
+                    root.ActualHeight <= window.MaxHeight,
+                    $"Rendered height {root.ActualHeight} is outside {window.MinHeight}..{window.MaxHeight}.");
                 var tiles = MainWindow.Descendants<Border>(window.DesktopCards)
                     .Where(border => border.Name == "SlotTile").ToList();
                 Assert.HasCount(9, tiles);
@@ -312,7 +313,9 @@ public sealed class ManagementLayoutTests
     private static FrameworkElement Measure(MainWindow window)
     {
         var root = (FrameworkElement)window.Content;
-        root.Measure(new Size(680, double.PositiveInfinity));
+        // The window is SizeToContent="Height" with a MaxHeight, so measure with that bound:
+        // the desktop list scrolls instead of growing past it, exactly as it does on screen.
+        root.Measure(new Size(680, window.MaxHeight));
         root.Arrange(new Rect(0, 0, 680,
             Math.Clamp(root.DesiredSize.Height, window.MinHeight, window.MaxHeight)));
         root.UpdateLayout();

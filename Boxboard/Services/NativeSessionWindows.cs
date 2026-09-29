@@ -8,7 +8,8 @@ namespace Boxboard.Services;
 
 public sealed class WindowPlacementRejectedException(string message) : InvalidOperationException(message);
 
-public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWindows, IDisposable
+public sealed partial class NativeSessionWindows(nint boardHandle, PixelRect? workArea = null)
+    : ISessionWindows, IDisposable
 {
     private readonly IVirtualDesktopManager _desktops = (IVirtualDesktopManager)Activator.CreateInstance(
         Type.GetTypeFromCLSID(new Guid("AA509086-5CA9-4C25-8F95-589D3C07B48A"), throwOnError: true)!)!;
@@ -18,10 +19,16 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
     {
         Marshal.ThrowExceptionForHR(_desktops.GetWindowDesktopId(boardHandle, out var desktop));
         Marshal.ThrowExceptionForHR(_desktops.IsWindowOnCurrentVirtualDesktop(boardHandle, out var current));
-        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        return new(desktop, current != 0, CanInteractWithInputDesktop(), workArea ?? MonitorWorkArea());
+    }
+
+    /// <summary>Work area of the monitor that currently holds the window this instance was created for.</summary>
+    public PixelRect MonitorWorkArea()
+    {
+        var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
         if (GetMonitorInfoW(MonitorFromWindow(boardHandle, 2), ref info) == 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError());
-        return new(desktop, current != 0, CanInteractWithInputDesktop(), info.Work.ToPixels());
+        return info.Work.ToPixels();
     }
 
     public IReadOnlyList<SessionWindow> Enumerate()
@@ -235,7 +242,7 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
         if (!environment.CanInteract)
             throw new InvalidOperationException("Layout paused because Windows is locked or showing a secure desktop.");
         if (!environment.WorkArea.Contains(bounds))
-            throw new InvalidOperationException("Cell bounds extend outside the board's single-monitor work area.");
+            throw new InvalidOperationException("Cell bounds extend outside the target monitor's work area.");
         var actual = Enumerate().SingleOrDefault(w => w.Identity == expected.Identity &&
             string.Equals(w.Title, expected.Title, StringComparison.Ordinal));
         if (actual is null || actual.DesktopId != environment.DesktopId)
@@ -316,7 +323,7 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
     [LibraryImport("user32.dll")]
     private static partial nint MonitorFromWindow(nint hwnd, uint flags);
     [LibraryImport("user32.dll", SetLastError = true)]
-    private static partial int GetMonitorInfoW(nint monitor, ref MonitorInfo info);
+    private static partial int GetMonitorInfoW(nint monitor, ref NativeMonitorInfo info);
     [LibraryImport("user32.dll")]
     private static partial int ShowWindowAsync(nint hwnd, int show);
     [LibraryImport("user32.dll", SetLastError = true)]
@@ -329,7 +336,7 @@ public sealed partial class NativeSessionWindows(nint boardHandle) : ISessionWin
         public readonly PixelRect ToPixels() => new(Left, Top, Right - Left, Bottom - Top);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private struct MonitorInfo { public int Size; public NativeRect Monitor, Work; public uint Flags; }
+    private struct NativeMonitorInfo { public int Size; public NativeRect Monitor, Work; public uint Flags; }
 
     [ComImport, Guid("A5CD92FF-29BE-454C-8D04-D82879FB3F1B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IVirtualDesktopManager

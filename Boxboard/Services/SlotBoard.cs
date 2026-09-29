@@ -8,29 +8,30 @@ public sealed class SlotBoard(ISettingsStore store)
 {
     private readonly SemaphoreSlim _changes = new(1, 1);
     private HashSet<string> _available = new(StringComparer.OrdinalIgnoreCase);
-    private Guid? _selectedDesktopId;
+    private LayoutKey? _selectedKey;
     public BoardSettings Settings { get; private set; } = new();
     public bool DiscoveryVerified { get; private set; }
     public string? RefreshError { get; private set; }
-    public Guid? SelectedDesktopId => _selectedDesktopId;
+    public LayoutKey? SelectedKey => _selectedKey;
+    public Guid? SelectedDesktopId => _selectedKey?.DesktopId;
     public IReadOnlyList<SlotAssignment> CurrentSlots => SlotsFor(Settings);
-    public bool KeepConnected => _selectedDesktopId is { } id && IsKeepConnected(id);
+    public bool KeepConnected => _selectedKey is { } key && IsKeepConnected(key);
     public WindowLayoutMode LayoutMode => CurrentLayout(Settings)?.LayoutMode ?? Settings.PrimaryLayoutMode;
     public IReadOnlyList<SlotAssignment> VisibleSlots => CurrentSlots.Take(VisibleCount(LayoutMode)).ToList();
-    public IReadOnlyList<SlotAssignment> GetVisibleSlots(Guid desktopId) =>
-        GetSlots(desktopId).Take(VisibleCount(GetLayoutMode(desktopId))).ToList();
-    public WindowLayoutMode GetLayoutMode(Guid desktopId) =>
-        Settings.PrimaryDesktopId == desktopId ? Settings.PrimaryLayoutMode :
-        Settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).LayoutMode;
-    public bool IsKeepConnected(Guid desktopId) =>
-        Settings.PrimaryDesktopId == desktopId ? Settings.PrimaryKeepConnected :
-        Settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).KeepConnected;
-    public IReadOnlyList<SlotAssignment> GetSlots(Guid desktopId) =>
-        Settings.PrimaryDesktopId == desktopId ? Settings.Slots :
-        Settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).Slots;
-    public IReadOnlyList<DesktopLayoutOption> Layouts => Settings.PrimaryDesktopId is { } primary
-        ? [new(primary, Settings.PrimaryDesktopName),
-            .. Settings.DesktopLayouts.Select(layout => new DesktopLayoutOption(layout.DesktopId, layout.Name))]
+    public IReadOnlyList<SlotAssignment> GetVisibleSlots(LayoutKey key) =>
+        GetSlots(key).Take(VisibleCount(GetLayoutMode(key))).ToList();
+    public WindowLayoutMode GetLayoutMode(LayoutKey key) =>
+        Settings.PrimaryKey == key ? Settings.PrimaryLayoutMode : Layout(key).LayoutMode;
+    public bool IsKeepConnected(LayoutKey key) =>
+        Settings.PrimaryKey == key ? Settings.PrimaryKeepConnected : Layout(key).KeepConnected;
+    public IReadOnlyList<SlotAssignment> GetSlots(LayoutKey key) =>
+        Settings.PrimaryKey == key ? Settings.Slots : Layout(key).Slots;
+    public bool HasLayout(LayoutKey key) =>
+        Settings.PrimaryKey == key || Settings.DesktopLayouts.Any(layout => layout.Key == key);
+    public IReadOnlyList<DesktopLayoutOption> Layouts => Settings.PrimaryKey is { } primary
+        ? [new(primary, Settings.PrimaryDesktopName, Settings.PrimaryMonitorNumber),
+            .. Settings.DesktopLayouts.Select(layout =>
+                new DesktopLayoutOption(layout.Key, layout.Name, layout.MonitorNumber))]
         : [];
 
     public async Task LoadAsync(CancellationToken ct = default)
@@ -38,53 +39,90 @@ public sealed class SlotBoard(ISettingsStore store)
         var settings = await store.LoadAsync(ct);
         settings.Validate();
         Settings = settings;
-        _selectedDesktopId = settings.PrimaryDesktopId;
+        _selectedKey = settings.PrimaryKey;
     }
 
-    public async Task SelectDesktopAsync(Guid desktopId, string name, CancellationToken ct = default)
+    public async Task SelectDesktopAsync(LayoutKey key, string name, int monitorNumber = 0,
+        CancellationToken ct = default)
     {
-        if (desktopId == Guid.Empty || string.IsNullOrWhiteSpace(name))
+        if (key.DesktopId == Guid.Empty || string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("A desktop layout needs a nonempty identity and name.");
+        if (key.MonitorId is null != (monitorNumber == 0))
+            throw new ArgumentException("A pinned layout needs both a monitor identity and its number.");
         await _changes.WaitAsync(ct);
         try
         {
+            var version = key.MonitorId is null ? 3 : 5;
             if (Settings.PrimaryDesktopId is null)
                 await CommitAsync(Settings with
                 {
-                    Version = Math.Max(Settings.Version, 3),
-                    PrimaryDesktopId = desktopId,
-                    PrimaryDesktopName = name
+                    Version = Math.Max(Settings.Version, version),
+                    PrimaryDesktopId = key.DesktopId,
+                    PrimaryDesktopName = name,
+                    PrimaryMonitorId = key.MonitorId,
+                    PrimaryMonitorNumber = monitorNumber
                 }, ct);
-            else if (Settings.PrimaryDesktopId != desktopId &&
-                !Settings.DesktopLayouts.Any(layout => layout.DesktopId == desktopId))
+            else if (!HasLayout(key))
             {
-                var layout = new DesktopLayout(desktopId, name, 5,
-                    [.. Enumerable.Range(1, 4).Select(number => new SlotAssignment(Guid.NewGuid(), number))]);
+                var layout = new DesktopLayout(key.DesktopId, name, 5,
+                    [.. Enumerable.Range(1, 4).Select(number => new SlotAssignment(Guid.NewGuid(), number))])
+                {
+                    MonitorId = key.MonitorId,
+                    MonitorNumber = monitorNumber
+                };
                 await CommitAsync(Settings with
                 {
-                    Version = Math.Max(Settings.Version, 3),
+                    Version = Math.Max(Settings.Version, version),
                     DesktopLayouts = [.. Settings.DesktopLayouts, layout]
                 }, ct);
             }
-            else if (Settings.Version < 3)
-                await CommitAsync(Settings with { Version = 3 }, ct);
-            _selectedDesktopId = desktopId;
+            else if (Settings.Version < version)
+                await CommitAsync(Settings with { Version = version }, ct);
+            _selectedKey = key;
         }
         finally { _changes.Release(); }
     }
 
+    /// <summary>
+    /// Pins a layout saved before monitor pinning existed to a monitor, keeping its slots and assignments.
+    /// </summary>
+    public async Task PinLayoutAsync(LayoutKey key, string monitorId, int monitorNumber,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(monitorId) || monitorNumber < 1)
+            throw new ArgumentException("A monitor pin needs a nonempty identity and a positive number.");
+        if (key.MonitorId is not null)
+            throw new InvalidOperationException("That layout is already pinned to a monitor.");
+        if (!HasLayout(key))
+            throw new InvalidOperationException("The layout to pin no longer exists.");
+        await ChangeAsync(settings =>
+        {
+            var pinned = settings.PrimaryKey == key
+                ? settings with { PrimaryMonitorId = monitorId, PrimaryMonitorNumber = monitorNumber }
+                : settings with
+                {
+                    DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.Key == key
+                        ? layout with { MonitorId = monitorId, MonitorNumber = monitorNumber }
+                        : layout).ToList()
+                };
+            return pinned with { Version = Math.Max(pinned.Version, 5) };
+        }, ct);
+        if (_selectedKey == key)
+            _selectedKey = new LayoutKey(key.DesktopId, monitorId);
+    }
+
     public Task SetKeepConnectedAsync(bool enabled, CancellationToken ct = default)
     {
-        if (_selectedDesktopId is not { } selected)
+        if (_selectedKey is not { } selected)
             throw new InvalidOperationException("Select a desktop layout before changing Keep connected.");
         return SetKeepConnectedAsync(selected, enabled, ct);
     }
 
-    public Task SetKeepConnectedAsync(Guid desktopId, bool enabled, CancellationToken ct = default)
+    public Task SetKeepConnectedAsync(LayoutKey key, bool enabled, CancellationToken ct = default)
     {
-        if (IsKeepConnected(desktopId) == enabled && Settings.Version >= 3)
+        if (IsKeepConnected(key) == enabled && Settings.Version >= 3)
             return Task.CompletedTask;
-        return ChangeAsync(settings => settings.PrimaryDesktopId == desktopId
+        return ChangeAsync(settings => settings.PrimaryKey == key
             ? settings with
             {
                 Version = Math.Max(settings.Version, 3),
@@ -93,7 +131,7 @@ public sealed class SlotBoard(ISettingsStore store)
             : settings with
             {
                 Version = Math.Max(settings.Version, 3),
-                DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.DesktopId == desktopId
+                DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.Key == key
                     ? layout with { KeepConnected = enabled } : layout).ToList()
             }, ct);
     }
@@ -102,31 +140,31 @@ public sealed class SlotBoard(ISettingsStore store)
     {
         if (!Enum.IsDefined(mode))
             throw new ArgumentOutOfRangeException(nameof(mode));
-        if (_selectedDesktopId is not { } selected)
+        if (_selectedKey is not { } selected)
             throw new InvalidOperationException("Select a desktop layout before changing its window arrangement.");
         return SetLayoutModeAsync(selected, mode, ct);
     }
 
-    public Task SetLayoutModeAsync(Guid desktopId, WindowLayoutMode mode, CancellationToken ct = default)
+    public Task SetLayoutModeAsync(LayoutKey key, WindowLayoutMode mode, CancellationToken ct = default)
     {
         if (!Enum.IsDefined(mode))
             throw new ArgumentOutOfRangeException(nameof(mode));
-        if (GetLayoutMode(desktopId) == mode)
+        if (GetLayoutMode(key) == mode)
             return Task.CompletedTask;
         return ChangeAsync(settings =>
         {
-            var previousMode = settings.PrimaryDesktopId == desktopId ? settings.PrimaryLayoutMode :
-                settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).LayoutMode;
+            var previousMode = settings.PrimaryKey == key ? settings.PrimaryLayoutMode :
+                settings.DesktopLayouts.Single(layout => layout.Key == key).LayoutMode;
             var oldCount = VisibleCount(previousMode);
             var newCount = VisibleCount(mode);
-            var slots = SlotsFor(settings, desktopId).Select((slot, index) =>
+            var slots = SlotsFor(settings, key).Select((slot, index) =>
                 index >= newCount && index < oldCount ? slot with { MachineId = null } : slot).ToList();
-            return settings.PrimaryDesktopId == desktopId
+            return settings.PrimaryKey == key
                 ? settings with { Version = Math.Max(settings.Version, 4), PrimaryLayoutMode = mode, Slots = slots }
                 : settings with
                 {
                     Version = Math.Max(settings.Version, 4),
-                    DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.DesktopId == desktopId
+                    DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.Key == key
                         ? layout with { LayoutMode = mode, Slots = slots } : layout).ToList()
                 };
         }, ct);
@@ -195,29 +233,29 @@ public sealed class SlotBoard(ISettingsStore store)
         return ReplaceSelected(settings, slots.Select(s => s.Id == slotId ? s with { MachineId = null } : s).ToList());
     }, ct);
 
-    public Task ClearSlotAsync(Guid desktopId, Guid slotId, CancellationToken ct = default) => ChangeAsync(settings =>
+    public Task ClearSlotAsync(LayoutKey key, Guid slotId, CancellationToken ct = default) => ChangeAsync(settings =>
     {
-        var slots = SlotsFor(settings, desktopId);
+        var slots = SlotsFor(settings, key);
         _ = slots.Single(s => s.Id == slotId);
         return ReplaceSelected(settings, slots.Select(s => s.Id == slotId ? s with { MachineId = null } : s).ToList(),
-            desktopId: desktopId);
+            key: key);
     }, ct);
 
     public Task<bool> AssignAsync(Guid slotId, string machineId, Func<MoveRequest, bool> confirmMove,
         CancellationToken ct = default) =>
-        AssignCoreAsync(_selectedDesktopId, slotId, machineId, confirmMove, ct);
+        AssignCoreAsync(_selectedKey, slotId, machineId, confirmMove, ct);
 
-    public Task<bool> AssignAsync(Guid desktopId, Guid slotId, string machineId, Func<MoveRequest, bool> confirmMove,
+    public Task<bool> AssignAsync(LayoutKey key, Guid slotId, string machineId, Func<MoveRequest, bool> confirmMove,
         CancellationToken ct = default) =>
-        AssignCoreAsync(desktopId, slotId, machineId, confirmMove, ct);
+        AssignCoreAsync(key, slotId, machineId, confirmMove, ct);
 
-    private async Task<bool> AssignCoreAsync(Guid? desktopId, Guid slotId, string machineId,
+    private async Task<bool> AssignCoreAsync(LayoutKey? key, Guid slotId, string machineId,
         Func<MoveRequest, bool> confirmMove, CancellationToken ct)
     {
         await _changes.WaitAsync(ct);
         try
         {
-            var target = (desktopId is { } id ? SlotsFor(Settings, id) : CurrentSlots)
+            var target = (key is { } layout ? SlotsFor(Settings, layout) : CurrentSlots)
                 .Single(s => s.Id == slotId);
             var machine = GetMachine(machineId);
             if (SameId(target.MachineId, machine.UniqueId))
@@ -287,28 +325,30 @@ public sealed class SlotBoard(ISettingsStore store)
         Settings = next;
     }
 
+    private DesktopLayout Layout(LayoutKey key) => Settings.DesktopLayouts.Single(layout => layout.Key == key);
+
     private DesktopLayout? CurrentLayout(BoardSettings settings) =>
-        _selectedDesktopId is { } id && settings.PrimaryDesktopId != id
-            ? settings.DesktopLayouts.Single(layout => layout.DesktopId == id)
+        _selectedKey is { } key && settings.PrimaryKey != key
+            ? settings.DesktopLayouts.Single(layout => layout.Key == key)
             : null;
 
     private IReadOnlyList<SlotAssignment> SlotsFor(BoardSettings settings) =>
         CurrentLayout(settings)?.Slots ?? settings.Slots;
 
-    private static IReadOnlyList<SlotAssignment> SlotsFor(BoardSettings settings, Guid desktopId) =>
-        settings.PrimaryDesktopId == desktopId ? settings.Slots :
-            settings.DesktopLayouts.Single(layout => layout.DesktopId == desktopId).Slots;
+    private static IReadOnlyList<SlotAssignment> SlotsFor(BoardSettings settings, LayoutKey key) =>
+        settings.PrimaryKey == key ? settings.Slots :
+            settings.DesktopLayouts.Single(layout => layout.Key == key).Slots;
 
     private BoardSettings ReplaceSelected(BoardSettings settings, List<SlotAssignment> slots, int? next = null,
-        Guid? desktopId = null)
+        LayoutKey? key = null)
     {
-        var selected = desktopId is { } id
-            ? settings.DesktopLayouts.SingleOrDefault(layout => layout.DesktopId == id) : CurrentLayout(settings);
+        var selected = key is { } layoutKey
+            ? settings.DesktopLayouts.SingleOrDefault(layout => layout.Key == layoutKey) : CurrentLayout(settings);
         if (selected is null)
             return settings with { Slots = slots, NextSlotNumber = next ?? settings.NextSlotNumber };
         return settings with
         {
-            DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.DesktopId == selected.DesktopId
+            DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.Key == selected.Key
                 ? layout with { Slots = slots, NextSlotNumber = next ?? layout.NextSlotNumber }
                 : layout).ToList()
         };
@@ -317,14 +357,18 @@ public sealed class SlotBoard(ISettingsStore store)
     private static IEnumerable<SlotAssignment> AllSlots(BoardSettings settings) =>
         settings.Slots.Concat(settings.DesktopLayouts.SelectMany(layout => layout.Slots));
 
+    internal static string LayoutLabel(string name, int monitorNumber) =>
+        monitorNumber == 0 ? name : $"{name} · Monitor {monitorNumber}";
+
     private (SlotAssignment Slot, string Label)? AssignmentFor(string machineId)
     {
         if (Settings.Slots.FirstOrDefault(slot => SameId(slot.MachineId, machineId)) is { } primary)
             return (primary, Settings.PrimaryDesktopId is null
-                ? primary.Name : $"{Settings.PrimaryDesktopName} / {primary.Name}");
+                ? primary.Name
+                : $"{LayoutLabel(Settings.PrimaryDesktopName, Settings.PrimaryMonitorNumber)} / {primary.Name}");
         foreach (var layout in Settings.DesktopLayouts)
             if (layout.Slots.FirstOrDefault(slot => SameId(slot.MachineId, machineId)) is { } slot)
-                return (slot, $"{layout.Name} / {slot.Name}");
+                return (slot, $"{LayoutLabel(layout.Name, layout.MonitorNumber)} / {slot.Name}");
         return null;
     }
 
@@ -332,8 +376,10 @@ public sealed class SlotBoard(ISettingsStore store)
     {
         if (settings.Slots.FirstOrDefault(slot => slot.Id == slotId) is { } primary)
             return settings.PrimaryDesktopId is null
-                ? primary.Name : $"{settings.PrimaryDesktopName} / {primary.Name}";
+                ? primary.Name
+                : $"{LayoutLabel(settings.PrimaryDesktopName, settings.PrimaryMonitorNumber)} / {primary.Name}";
         var layout = settings.DesktopLayouts.Single(item => item.Slots.Any(slot => slot.Id == slotId));
-        return $"{layout.Name} / {layout.Slots.Single(slot => slot.Id == slotId).Name}";
+        return $"{LayoutLabel(layout.Name, layout.MonitorNumber)} / " +
+            $"{layout.Slots.Single(slot => slot.Id == slotId).Name}";
     }
 }

@@ -809,6 +809,26 @@ public sealed class SessionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task Arrange_FullscreenClient_FlagsTheSessionSoTheBoardCanWarn()
+    {
+        var windows = new Windows { Items = [Window()] };
+        using var coordinator = Create(windows);
+        coordinator.Bind(Slot, Machine, Window().Identity);
+        windows.Items = [Window() with { Fullscreen = true }];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.IsTrue(coordinator.For(Slot).Fullscreen);
+        Assert.Contains("fullscreen", coordinator.For(Slot).Status);
+        Assert.Contains("windowed", coordinator.For(Slot).Status);
+        Assert.IsEmpty(windows.Moves);
+
+        windows.Items = [Window()];
+        coordinator.Observe();
+        await coordinator.ArrangeAsync(Slot, Machine, true, Cell);
+        Assert.IsFalse(coordinator.For(Slot).Fullscreen);
+    }
+
+    [TestMethod]
     public async Task Reconnect_Timeout_StopsWaitingWithoutAutomaticRetries()
     {
         var clock = new Clock();

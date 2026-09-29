@@ -1,9 +1,10 @@
 # Boxboard
 
-Boxboard places Microsoft Dev Box windows on Windows virtual desktops. It
-remembers which Dev Box belongs in each slot, starts missing clients through
-Windows App, and positions their **separate, normal windows**. You can resize
-or move a client afterward without Boxboard moving it back.
+Boxboard places Microsoft Dev Box windows on Windows virtual desktops and
+monitors. It remembers which Dev Box belongs in each slot, on which desktop and
+on which monitor, starts missing clients through Windows App, and positions
+their **separate, normal windows**. You can resize or move a client afterward
+without Boxboard moving it back.
 
 ![Compact Boxboard management window with three desktop layouts](docs/screenshots/desktop-cards.png)
 
@@ -56,13 +57,29 @@ assignments.
 
 ## Use
 
-- Every virtual desktop has a card. Drag an unassigned Dev Box from the top
-  tray to a slot, or drag an assigned tile to another slot or desktop.
+- Every virtual desktop is a group, and every monitor in that group has its own
+  card. A Dev Box in a card is pinned to that desktop **and** that monitor, so
+  one desktop can hold a 2 × 2 grid on one monitor and a different arrangement
+  on the next. Drag an unassigned Dev Box from the top tray to a slot, or drag
+  an assigned tile to another slot, monitor or desktop.
   Dragging an assigned tile onto another assigned tile swaps them immediately.
   Dropping an unassigned tray entry onto an occupied slot replaces its Dev Box,
   returning the replaced one to the tray without closing its client.
+- **Identify monitors** shows each monitor's number on that monitor for a few
+  seconds. Boxboard numbers monitors from left to right, so use this to tell
+  which card is which before dragging Dev Boxes into it. A Dev Box stays pinned
+  to its monitor if the numbering shifts, as long as Windows continues to
+  report the same monitor device path. If Windows does not provide a device
+  path, the card says **pin may change** because the fallback uses a temporary
+  display name.
+- Layouts saved by an earlier version are pinned automatically on first start:
+  a running assigned client identifies the monitor. Otherwise, Boxboard picks
+  the only external monitor if there is exactly one, or the primary monitor,
+  and records the choice in its log. If a pinned monitor is
+  disconnected, its card stays with the assignments saved but cannot be edited
+  until the monitor is back.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
-  using the graphical preview cards on each desktop. One window fills the
+  using the graphical preview cards on each monitor card. One window fills that
   monitor's usable work area like a maximized window; Windows App keeps its
   normal frame and taskbar entry.
   Choosing fewer slots unassigns only the slots that disappear. Their Dev
@@ -74,7 +91,7 @@ assignments.
   clients. For a newly opened Windows App client, Boxboard can correct late
   sizing changes during its first 15 seconds; it leaves later manual window
   positions alone.
-- **Keep on** is enabled by default for each desktop. While Boxboard runs,
+- **Keep on** is enabled by default for each monitor card. While Boxboard runs,
   it can request a missing assigned client again, with a limit of three
   automatic requests per slot. Turn it off on a card if you want to leave
   a closed client closed. If an assigned Windows App client has one additional
@@ -97,8 +114,8 @@ Keep on. Closing Boxboard does not close Windows App clients.
 **Window open** means that a Windows App window exists, not that its RDP
 connection is active. Boxboard does not click Reconnect in Windows App,
 bypass Windows lock or sign-in, or store credentials.
-If a virtual desktop disappears, its assignments remain saved, but Boxboard
-cannot arrange clients on that missing desktop.
+If a virtual desktop or a monitor disappears, its assignments remain saved, but
+Boxboard cannot arrange clients there until it is back.
 
 ## Development
 

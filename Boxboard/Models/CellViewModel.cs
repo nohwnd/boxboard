@@ -7,6 +7,8 @@ public sealed class CellViewModel : INotifyPropertyChanged
 {
     public required SlotAssignment Slot { get; init; }
     public Guid DesktopId { get; init; }
+    public string? MonitorId { get; init; }
+    public LayoutKey Key => new(DesktopId, MonitorId);
     public required string MachineName { get; init; }
     public required string MachineDetails { get; init; }
     public bool IsAssigned => Slot.MachineId is not null;
@@ -17,6 +19,8 @@ public sealed class CellViewModel : INotifyPropertyChanged
         set { if (_isDragTarget != value) { _isDragTarget = value; PropertyChanged?.Invoke(this, new(nameof(IsDragTarget))); } }
     }
     public bool CanBind { get; init; }
+    /// <summary>Set when the client is fullscreen, which stops Boxboard from placing it.</summary>
+    public bool FullscreenBlocked { get; set; }
     private bool _canConnect;
     public bool CanConnect
     {

@@ -97,6 +97,9 @@
                 </Grid.RowDefinitions>
                 <DockPanel Grid.Row="0" Margin="4,0,2,11">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="IdentifyButton" Content="Identify monitors" Click="Identify_Click"
+                                MinHeight="28" Padding="9,4" Margin="0,0,5,0"
+                                ToolTip="Show each monitor's number on that monitor. Boxboard numbers them left to right." />
                         <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click"
                                 MinHeight="28" Padding="9,4" Margin="0,0,5,0" />
                         <Button x:Name="LogButton" Content="Log" Click="Log_Click"
@@ -160,8 +163,22 @@
                     <ItemsControl x:Name="DesktopCards">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
+                                <StackPanel Margin="0,0,0,2">
+                                    <Border BorderBrush="#DCE6EB" BorderThickness="0,0,0,1"
+                                            Padding="2,0,2,3" Margin="0,0,0,6">
+                                        <TextBlock VerticalAlignment="Center">
+                                            <Run Text="{Binding Name, Mode=OneWay}" FontSize="13"
+                                                 FontWeight="Bold" Foreground="#253544" />
+                                            <Run Text="  ·  " FontSize="11" Foreground="#A6BBC9" />
+                                            <Run Text="{Binding Summary, Mode=OneWay}" FontSize="11"
+                                                 Foreground="#687B89" />
+                                        </TextBlock>
+                                    </Border>
+                                    <ItemsControl ItemsSource="{Binding Cards}" Margin="12,0,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
                                 <Border BorderBrush="#E0E7EC" BorderThickness="1" Background="White"
-                                        CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                        CornerRadius="10" Padding="12" Margin="0,0,0,7">
                                     <StackPanel>
                                         <Grid Margin="1,0,1,6">
                                             <Grid.ColumnDefinitions>
@@ -170,12 +187,17 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"
-                                                       Foreground="#253544" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="0" VerticalAlignment="Center">
+                                                <Run Text="{Binding MonitorName, Mode=OneWay}" FontSize="14"
+                                                     FontWeight="SemiBold" Foreground="#253544" />
+                                                <LineBreak />
+                                                <Run Text="{Binding MonitorDetails, Mode=OneWay}" FontSize="11"
+                                                     Foreground="#687B89" />
+                                            </TextBlock>
                                             <Button Grid.Column="1" Width="164" MinHeight="34" Padding="6,2"
                                                     Margin="0,0,9,0" Content="{Binding SelectedMode}"
                                                     ContentTemplate="{StaticResource SelectedLayoutPreview}"
-                                                    IsEnabled="{Binding CanEdit}" Click="CardLayoutPicker_Click"
+                                                    IsEnabled="{Binding CanChooseLayout}" Click="CardLayoutPicker_Click"
                                                     ToolTip="Choose a window layout by its preview"
                                                     AutomationProperties.Name="{Binding SelectedMode.Name}">
                                                 <Button.ContextMenu>
@@ -314,6 +336,10 @@
                                         </TextBlock>
                                     </StackPanel>
                                 </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

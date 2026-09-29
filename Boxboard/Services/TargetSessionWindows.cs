@@ -5,7 +5,7 @@ namespace Boxboard.Services;
 public sealed class TargetSessionWindows(
     ISessionWindows managerWindows,
     Guid desktopId,
-    PixelRect workArea,
+    Func<PixelRect> workArea,
     Func<Guid> currentDesktopId,
     Func<SessionWindow, PixelRect, CancellationToken, Task> placeOnTarget) : ISessionWindows
 {
@@ -13,10 +13,10 @@ public sealed class TargetSessionWindows(
     {
         var manager = managerWindows.GetEnvironment();
         if (!manager.CanInteract)
-            return new(desktopId, false, false, workArea);
+            return new(desktopId, false, false, workArea());
         var current = manager.DesktopId == desktopId
             ? manager.IsCurrentDesktop : currentDesktopId() == desktopId;
-        return new(desktopId, current, manager.CanInteract, workArea);
+        return new(desktopId, current, manager.CanInteract, workArea());
     }
 
     public IReadOnlyList<SessionWindow> Enumerate() => managerWindows.Enumerate();
@@ -36,7 +36,7 @@ public sealed class TargetSessionWindows(
         var environment = GetEnvironment();
         if (!environment.CanInteract)
             throw new InvalidOperationException("Windows is locked or showing a secure desktop; no client was moved.");
-        if (window.DesktopId != desktopId || !workArea.Contains(bounds))
+        if (window.DesktopId != desktopId || !workArea().Contains(bounds))
             throw new InvalidOperationException("The client or requested bounds are outside the selected desktop layout.");
         return placeOnTarget(window, bounds, ct);
     }
