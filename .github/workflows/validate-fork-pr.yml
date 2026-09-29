@@ -1,0 +1,68 @@
+name: Validate fork PR
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to validate
+        required: true
+        type: number
+
+# This workflow executes code from a fork. Never grant write access or expose secrets.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-latest
+
+    steps:
+      - name: Resolve pull request head
+        id: pr
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+        run: |
+          $pr = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
+          if ($pr.state -ne 'open' -or $pr.base.ref -ne 'main' -or
+              $null -eq $pr.head.repo -or $pr.head.repo.private) {
+            throw 'Only open pull requests against main from public repositories can be validated.'
+          }
+          "repository=$($pr.head.repo.full_name)" >> $env:GITHUB_OUTPUT
+          "sha=$($pr.head.sha)" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.repository }}
+          ref: ${{ steps.pr.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore Bevdox.slnx
+
+      - name: Build
+        run: dotnet build Bevdox.slnx -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test Boxboard.Tests/Boxboard.Tests.csproj -c Release --no-build
+
+      - name: Publish Boxboard
+        run: >
+          dotnet publish Boxboard/Boxboard.csproj
+          -c Release
+          -r win-x64
+          --self-contained
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/boxboard
