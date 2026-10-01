@@ -12,6 +12,12 @@ public sealed class CellViewModel : INotifyPropertyChanged
     public required string MachineName { get; init; }
     public required string MachineDetails { get; init; }
     public bool IsAssigned => Slot.MachineId is not null;
+    private bool _isDragSource;
+    public bool IsDragSource
+    {
+        get => _isDragSource;
+        set { if (_isDragSource != value) { _isDragSource = value; PropertyChanged?.Invoke(this, new(nameof(IsDragSource))); } }
+    }
     private bool _isDragTarget;
     public bool IsDragTarget
     {

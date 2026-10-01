@@ -40,15 +40,17 @@ jobs:
         run: dotnet test Boxboard.Tests/Boxboard.Tests.csproj -c Release --no-build --logger trx -bl:test.binlog
 
       - name: Publish Boxboard (self-contained)
-        run: >
-          dotnet publish Boxboard/Boxboard.csproj
-          -c Release
-          -r win-x64
-          --self-contained
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish/boxboard
-          -bl:publish-boxboard.binlog
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) }}
+        run: |
+          $version = '0.0.0-dev'
+          if ($env:RELEASE_TAG -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } elseif ($env:RELEASE_TAG) {
+            throw "Invalid release tag: $env:RELEASE_TAG"
+          }
+          dotnet publish Boxboard/Boxboard.csproj -c Release -r win-x64 --self-contained "-p:Version=$version" -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/boxboard -bl:publish-boxboard.binlog
 
       - name: Bundle portable app and license notices
         shell: pwsh

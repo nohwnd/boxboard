@@ -2,6 +2,7 @@ using Bevdox.Models;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Boxboard.Controls;
@@ -96,6 +97,9 @@ public sealed class ManagementLayoutTests
                 Assert.IsTrue(window.MachineList.Items.Cast<MachineOption>().All(machine =>
                     machine.Label is not ("azdo1" or "azdo2" or "azdo3" or "aitestagent" or "offline-box")));
                 Assert.AreEqual(680, window.Width);
+                Assert.AreEqual("Re-apply all", window.ReapplyAllButton.Content);
+                Assert.IsFalse(window.ReapplyAllButton.IsEnabled);
+                Assert.AreEqual("dev", window.VersionText.Text);
                 Assert.IsTrue(root.ActualHeight >= window.MinHeight &&
                     root.ActualHeight <= window.MaxHeight,
                     $"Rendered height {root.ActualHeight} is outside {window.MinHeight}..{window.MaxHeight}.");
@@ -277,6 +281,128 @@ public sealed class ManagementLayoutTests
             [data, DragDropKeyStates.LeftMouseButton, DragDropEffects.Move, target, new Point(8, 8)]);
         args.RoutedEvent = routed;
         return args;
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task AssignedTile_PressShowsDragSourceBeforeMovement()
+    {
+        return WpfTestHost.RunAsync(() =>
+        {
+            var board = new SlotBoard(new MemoryStore(DemoData.Settings()));
+            board.LoadAsync().GetAwaiter().GetResult();
+            board.EnsureFourCellsAsync().GetAwaiter().GetResult();
+            var window = new MainWindow(board, demo: true, "offline-layout");
+            try
+            {
+                var root = Measure(window);
+                var tile = MainWindow.Descendants<Border>(window.DesktopCards)
+                    .First(border => border.Name == "SlotTile" &&
+                        border.DataContext is CellViewModel { IsAssigned: true });
+                var cell = (CellViewModel)tile.DataContext;
+                tile.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+                    Source = tile
+                });
+                root.UpdateLayout();
+                Assert.IsTrue(cell.IsDragSource);
+                Capture(root, "compact-assigned-pressed");
+                Assert.AreEqual(Color.FromRgb(32, 116, 180),
+                    ((SolidColorBrush)tile.BorderBrush).Color);
+                Assert.IsNotNull(tile.Effect);
+                tile.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent,
+                    Source = tile
+                });
+                root.UpdateLayout();
+                Assert.IsFalse(cell.IsDragSource);
+                Assert.AreEqual(Color.FromRgb(226, 232, 237), ((SolidColorBrush)tile.BorderBrush).Color);
+                var clearButton = MainWindow.Descendants<Button>(tile)
+                    .Single(button => button.Name == "ClearAssignmentButton");
+                clearButton.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,
+                    Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+                    Source = clearButton
+                });
+                Assert.IsFalse(cell.IsDragSource);
+            }
+            finally { window.Close(); }
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task Inventory_PressHighlightsTheSelectedDragSource()
+    {
+        return WpfTestHost.RunAsync(() =>
+        {
+            var board = new SlotBoard(new MemoryStore(DemoData.Settings()));
+            board.LoadAsync().GetAwaiter().GetResult();
+            board.EnsureFourCellsAsync().GetAwaiter().GetResult();
+            var window = new MainWindow(board, demo: true, "offline-layout");
+            try
+            {
+                var root = Measure(window);
+                var tile = MainWindow.Descendants<Border>(window.MachineList)
+                    .First(border => border.Name == "MachineTile");
+                tile.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+                    Source = tile
+                });
+                root.UpdateLayout();
+                Assert.IsNotNull(tile.Tag);
+                Assert.AreEqual(Color.FromRgb(32, 116, 180), ((SolidColorBrush)tile.BorderBrush).Color);
+                Capture(root, "compact-inventory-selected");
+                tile.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent,
+                    Source = tile
+                });
+                Assert.IsNull(tile.Tag);
+            }
+            finally { window.Close(); }
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    public void VersionLabel_HidesBuildMetadataAndUsesDevForUnreleasedBuilds()
+    {
+        Assert.AreEqual("v1.4.1", MainWindow.FormatVersion("1.4.1+abc123"));
+        Assert.AreEqual("dev", MainWindow.FormatVersion("0.0.0-dev+abc123"));
+        Assert.ThrowsExactly<ArgumentException>(() => MainWindow.FormatVersion(""));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task Header_WithReapplyAllFitsMinimumWidth()
+    {
+        return WpfTestHost.RunAsync(() =>
+        {
+            var board = new SlotBoard(new MemoryStore(DemoData.Settings()));
+            board.LoadAsync().GetAwaiter().GetResult();
+            board.EnsureFourCellsAsync().GetAwaiter().GetResult();
+            var window = new MainWindow(board, demo: true, "offline-layout");
+            try
+            {
+                var root = (FrameworkElement)window.Content;
+                root.Measure(new Size(window.MinWidth, window.MaxHeight));
+                root.Arrange(new Rect(0, 0, window.MinWidth,
+                    Math.Clamp(root.DesiredSize.Height, window.MinHeight, window.MaxHeight)));
+                root.UpdateLayout();
+                var right = window.LogButton.TranslatePoint(
+                    new Point(window.LogButton.ActualWidth, 0), root).X;
+                Assert.IsLessThanOrEqualTo(window.MinWidth, right);
+                Capture(root, "compact-minimum-width");
+            }
+            finally { window.Close(); }
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(20));
     }
 
     [TestMethod]

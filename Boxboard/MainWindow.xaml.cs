@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -34,6 +35,10 @@ public partial class MainWindow : Window
     private bool _busy, _arranging, _closeRequested, _loadedOnce;
     private string? _operationError;
     private Point _dragStart;
+    private CellViewModel? _pressedCell;
+    private UIElement? _pressedTile;
+    private MachineOption? _pressedMachine;
+    private Border? _pressedInventoryTile;
     private HwndSource? _source;
     private bool _sessionNotifications;
     private readonly ActivityLog _log;
@@ -74,6 +79,10 @@ public partial class MainWindow : Window
         // A supplied monitor source is already known; the real one is read when the window loads.
         if (monitors is not null)
             _monitorChoices = monitors.GetMonitors();
+        VersionText.Text = FormatVersion(typeof(MainWindow).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? throw new InvalidOperationException("The Boxboard build version is unavailable."));
+        ReapplyAllButton.IsEnabled = !demo;
         Title = demo ? "Boxboard - OFFLINE DEMO" : "Boxboard";
         _log.Write("Boxboard", demo ? "Offline demo opened; no real clients will be controlled." :
             "Board opened. Keep connected may request missing assigned clients when enabled.");
@@ -86,6 +95,14 @@ public partial class MainWindow : Window
     internal IReadOnlyList<DesktopCardViewModel> Cards => Groups.SelectMany(group => group.Cards).ToList();
     internal IReadOnlyList<CellViewModel> Cells => Cards.SelectMany(card => card.Cells).ToList();
     internal bool IsTrayIconVisible => _notifyIcon?.Visible == true;
+
+    internal static string FormatVersion(string informationalVersion)
+    {
+        var version = informationalVersion.Split('+')[0];
+        if (string.IsNullOrWhiteSpace(version))
+            throw new ArgumentException("The build version cannot be empty.", nameof(informationalVersion));
+        return version == "0.0.0-dev" ? "dev" : $"v{version}";
+    }
 
     private void Render()
     {
@@ -286,7 +303,8 @@ public partial class MainWindow : Window
         if (_busy)
             return;
         _busy = true;
-        DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = false;
+        DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled =
+            ReapplyAllButton.IsEnabled = false;
         _operationError = null;
         try
         {
@@ -303,6 +321,7 @@ public partial class MainWindow : Window
             Render();
             _busy = false;
             DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = true;
+            ReapplyAllButton.IsEnabled = !_demo;
             if (_closeRequested)
                 Close();
         }
@@ -663,18 +682,21 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RefreshAvailableLayoutsAsync()
+    {
+        _monitorChoices = _monitors.GetMonitors();
+        var available = Environment.OSVersion.Version.Build >= 26100
+            ? VirtualDesktopShell.GetDesktops()
+            : _desktopChoices.Where(desktop => desktop.Available).ToList();
+        RefreshDesktopChoices(available);
+        await EnsureMonitorLayoutsAsync();
+    }
+
     private Task RefreshAsync() => RunAsync(async () =>
     {
         _log.Write("Discovery", _demo ? "Synthetic demo discovery started." : "Read-only discovery started.");
         if (!_demo && _windows is not null)
-        {
-            _monitorChoices = _monitors.GetMonitors();
-            var available = Environment.OSVersion.Version.Build >= 26100
-                ? VirtualDesktopShell.GetDesktops()
-                : _desktopChoices.Where(desktop => desktop.Available).ToList();
-            RefreshDesktopChoices(available);
-            await EnsureMonitorLayoutsAsync();
-        }
+            await RefreshAvailableLayoutsAsync();
         var progress = new Progress<string>(message =>
         {
             if (_busy) StatusText.Text = message;
@@ -767,12 +789,9 @@ public partial class MainWindow : Window
         });
     }
 
-    private async void CardApply_Click(object sender, RoutedEventArgs e) => await RunAsync(async () =>
+    private async Task<LayoutApplyResult?> ReapplyCardAsync(DesktopCardViewModel card)
     {
-        if (_demo)
-            throw new InvalidOperationException("Offline demo does not connect or arrange real client windows.");
-        if (sender is not Button { DataContext: DesktopCardViewModel card } || !card.CanEdit ||
-            !_layouts.TryGetValue(card.Key, out var runtime))
+        if (!card.CanEdit || !_layouts.TryGetValue(card.Key, out var runtime))
             throw new InvalidOperationException("The selected desktop layout is unavailable.");
         runtime.KeepConnected.Reset();
         var result = await ApplyVisibleLayoutAsync(card.Key, runtime);
@@ -780,6 +799,45 @@ public partial class MainWindow : Window
         _log.Write("Window integration", result is null ? $"{label} has no assigned clients to re-apply." :
             $"{label} re-applied: {result.Bound} existing client(s) bound, " +
             $"{result.Moved} moved to this desktop, {result.ConnectionRequests} connection(s) requested.");
+        return result;
+    }
+
+    private async void CardApply_Click(object sender, RoutedEventArgs e) => await RunAsync(async () =>
+    {
+        if (_demo)
+            throw new InvalidOperationException("Offline demo does not connect or arrange real client windows.");
+        if (sender is not Button { DataContext: DesktopCardViewModel card })
+            throw new InvalidOperationException("The selected desktop layout is unavailable.");
+        await ReapplyCardAsync(card);
+    });
+
+    private async void ReapplyAll_Click(object sender, RoutedEventArgs e) => await RunAsync(async () =>
+    {
+        if (_demo || _windows is null)
+            throw new InvalidOperationException("Offline demo does not connect or arrange real client windows.");
+        await RefreshAvailableLayoutsAsync();
+        Render();
+        var assigned = Cards.Where(card => _board.HasLayout(card.Key) &&
+            _board.GetVisibleSlots(card.Key).Any(slot => slot.MachineId is not null)).ToList();
+        var available = assigned.Where(card => card.CanEdit && _layouts.ContainsKey(card.Key))
+            .ToDictionary(card => card.Key);
+        var skipped = assigned.Where(card => !available.ContainsKey(card.Key))
+            .Select(card => $"{card.Name} · {card.MonitorName}").ToList();
+        if (available.Count == 0)
+            throw new InvalidOperationException(assigned.Count == 0
+                ? "No layouts have assigned Dev Boxes to re-apply."
+                : $"No assigned layouts are available. Disconnected: {string.Join(", ", skipped)}.");
+
+        var result = await LayoutBatchApplier.ApplyAsync([.. available.Keys],
+            key => ReapplyCardAsync(available[key]), _lifetime.Token);
+        var summary = $"Re-apply all: {result.Applied}/{available.Count} layout(s), " +
+            $"{result.Bound} existing client(s) bound, {result.Moved} moved, " +
+            $"{result.ConnectionRequests} connection(s) requested." +
+            (skipped.Count == 0 ? "" : $" Skipped unavailable: {string.Join(", ", skipped)}.");
+        _log.Write("Window integration", summary);
+        if (result.Failures.Count > 0)
+            throw new InvalidOperationException(summary + " Failed: " + string.Join("; ",
+                result.Failures.Select(failure => $"{LayoutName(failure.Key)}: {failure.Error.Message}")));
     });
 
     private void Identify_Click(object sender, RoutedEventArgs e) => IdentifyMonitors();
@@ -819,6 +877,13 @@ public partial class MainWindow : Window
         await Dispatcher.Yield(DispatcherPriority.Background);
         if (!_closeRequested)
             await UpdateSessionsAsync();
+    }
+
+    private void Window_Deactivated(object? sender, EventArgs e)
+    {
+        ReleasePressedCell();
+        ReleasePressedMachine();
+        ClearDragTargets();
     }
 
     private async Task UpdateSessionsAsync()
@@ -982,16 +1047,39 @@ public partial class MainWindow : Window
             $"{result.Moved} window(s) moved, {result.ConnectionRequests} connection(s) requested.");
     }
 
-    private void MachineList_MouseDown(object sender, MouseButtonEventArgs e) => _dragStart = e.GetPosition(this);
+    private void MachineTile_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border { DataContext: MachineOption machine } tile)
+            return;
+        ReleasePressedMachine();
+        _pressedMachine = machine;
+        _pressedInventoryTile = tile;
+        tile.Tag = true;
+        MachineList.SelectedItem = machine;
+        _dragStart = e.GetPosition(this);
+    }
+    private void ReleasePressedMachine()
+    {
+        if (_pressedInventoryTile is { } tile)
+            tile.Tag = null;
+        _pressedInventoryTile = null;
+        _pressedMachine = null;
+    }
+    private void MachineList_MouseUp(object sender, MouseButtonEventArgs e) => ReleasePressedMachine();
     private void MachineList_MouseMove(object sender, MouseEventArgs e)
     {
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            ReleasePressedMachine();
+            return;
+        }
         var point = e.GetPosition(this);
-        if (e.LeftButton == MouseButtonState.Pressed && MachineList.SelectedItem is MachineOption machine &&
+        if (_pressedMachine is { } machine &&
             (Math.Abs(point.X - _dragStart.X) > SystemParameters.MinimumHorizontalDragDistance ||
              Math.Abs(point.Y - _dragStart.Y) > SystemParameters.MinimumVerticalDragDistance))
         {
             try { DragDrop.DoDragDrop(MachineList, new DataObject(MachineDragFormat, machine.UniqueId), DragDropEffects.Move); }
-            finally { ClearDragTargets(); }
+            finally { ReleasePressedMachine(); ClearDragTargets(); }
         }
     }
     private void Cell_DragOver(object sender, DragEventArgs e)
@@ -1030,22 +1118,62 @@ public partial class MainWindow : Window
         foreach (var cell in Cards.SelectMany(card => card.Cells))
             cell.IsDragTarget = false;
     }
-    private void Cell_MouseDown(object sender, MouseButtonEventArgs e) => _dragStart = e.GetPosition(this);
+    private void Cell_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: CellViewModel { IsAssigned: true } cell } tile ||
+            e.OriginalSource is DependencyObject source && IsInsideButton(source, tile))
+            return;
+        ReleasePressedCell();
+        _dragStart = e.GetPosition(this);
+        _pressedCell = cell;
+        _pressedTile = tile;
+        cell.IsDragSource = true;
+        if (PresentationSource.FromVisual(tile) is not null)
+            tile.CaptureMouse();
+    }
+
+    private static bool IsInsideButton(DependencyObject source, DependencyObject tile)
+    {
+        for (DependencyObject? current = source; current is not null && current != tile;
+             current = current is Visual ? VisualTreeHelper.GetParent(current) : null)
+            if (current is Button)
+                return true;
+        return false;
+    }
+
+    private void ReleasePressedCell()
+    {
+        if (_pressedCell is { } cell)
+            cell.IsDragSource = false;
+        if (_pressedTile is not null && Mouse.Captured == _pressedTile)
+            Mouse.Capture(null);
+        _pressedCell = null;
+        _pressedTile = null;
+    }
+
+    private void Cell_MouseUp(object sender, MouseButtonEventArgs e) => ReleasePressedCell();
     private void Cell_MouseMove(object sender, MouseEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: CellViewModel cell } ||
-            cell.Slot.MachineId is not { } machineId || e.LeftButton != MouseButtonState.Pressed)
+            _pressedCell != cell || cell.Slot.MachineId is not { } machineId)
             return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            ReleasePressedCell();
+            return;
+        }
         var point = e.GetPosition(this);
         if (Math.Abs(point.X - _dragStart.X) > SystemParameters.MinimumHorizontalDragDistance ||
             Math.Abs(point.Y - _dragStart.Y) > SystemParameters.MinimumVerticalDragDistance)
         {
+            if (Mouse.Captured == sender)
+                Mouse.Capture(null);
             try
             {
                 DragDrop.DoDragDrop((DependencyObject)sender, new DataObject(MachineDragFormat, machineId),
                     DragDropEffects.Move);
             }
-            finally { ClearDragTargets(); }
+            finally { ReleasePressedCell(); ClearDragTargets(); }
         }
     }
     private async void AssignSelected_Click(object sender, RoutedEventArgs e)
