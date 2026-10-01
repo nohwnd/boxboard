@@ -90,9 +90,12 @@ assignments.
 - Assignment changes and layout choices take effect automatically.
   **Re-apply** explicitly snaps all visible assigned windows back to their
   slots, including windows you have manually resized, and retries missing
-  clients. For a newly opened Windows App client, Boxboard can correct late
-  sizing changes during its first 15 seconds; it leaves later manual window
-  positions alone.
+  clients. **Re-apply all** does the same for every available desktop and
+  monitor card with assignments; disconnected layouts are skipped without
+  losing their assignments. If one card fails, Boxboard continues with the
+  others and reports the failure in the Log. For a newly opened Windows App
+  client, Boxboard can correct late sizing changes during its first 15 seconds;
+  it leaves later manual window positions alone.
 - **Keep on** is enabled by default for each monitor card. While Boxboard runs,
   it can request a missing assigned client again, with a limit of three
   automatic requests per slot. Turn it off on a card if you want to leave
@@ -106,7 +109,8 @@ assignments.
 - Use the trash icon on a tile to clear its assignment. Right-click an
   assigned tile for manual **Connect / Reconnect** or **Bind an existing
   window** when client titles are ambiguous. The **Log** button opens a
-  separate in-memory diagnostic window.
+  separate in-memory diagnostic window. The small label next to **Boxboard**
+  shows the release version; unreleased builds say **dev**.
 
 Minimize Boxboard to keep it running in the notification area without a
 taskbar button. Double-click its tray icon to open the manager; right-click

@@ -12,6 +12,7 @@
     <AssemblyTitle>Boxboard</AssemblyTitle>
     <Description>Boxboard</Description>
     <Product>Boxboard</Product>
+    <Version>0.0.0-dev</Version>
   </PropertyGroup>
   <ItemGroup>
     <Using Remove="System.Drawing" />

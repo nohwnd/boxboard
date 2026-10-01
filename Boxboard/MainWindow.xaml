@@ -8,7 +8,8 @@
         SizeToContent="Height"
         FontFamily="Segoe UI" FontSize="12" Background="#EEF2F5"
         Loaded="Window_Loaded" StateChanged="Window_StateChanged"
-        Closing="Window_Closing" Closed="Window_Closed" Activated="Window_Activated">
+        Closing="Window_Closing" Closed="Window_Closed"
+        Activated="Window_Activated" Deactivated="Window_Deactivated">
     <Window.Resources>
         <ItemsPanelTemplate x:Key="QuadrantsPanel">
             <UniformGrid Rows="2" Columns="2" />
@@ -100,13 +101,20 @@
                         <Button x:Name="IdentifyButton" Content="Identify monitors" Click="Identify_Click"
                                 MinHeight="28" Padding="9,4" Margin="0,0,5,0"
                                 ToolTip="Show each monitor's number on that monitor. Boxboard numbers them left to right." />
+                        <Button x:Name="ReapplyAllButton" Content="Re-apply all" Click="ReapplyAll_Click"
+                                MinHeight="28" Padding="9,4" Margin="0,0,5,0"
+                                ToolTip="Re-apply every available layout and request missing assigned Dev Boxes." />
                         <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click"
                                 MinHeight="28" Padding="9,4" Margin="0,0,5,0" />
                         <Button x:Name="LogButton" Content="Log" Click="Log_Click"
                                 MinHeight="28" Padding="9,4" Margin="0" />
                     </StackPanel>
                     <StackPanel>
-                        <TextBlock Text="Boxboard" FontSize="21" FontWeight="Bold" Foreground="#253544" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Boxboard" FontSize="21" FontWeight="Bold" Foreground="#253544" />
+                            <TextBlock x:Name="VersionText" FontSize="10" Foreground="#8898A5"
+                                       Margin="7,0,0,3" VerticalAlignment="Bottom" />
+                        </StackPanel>
                         <TextBlock x:Name="StatusText" FontSize="11" Foreground="#687B89" TextTrimming="CharacterEllipsis"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite" />
@@ -125,7 +133,7 @@
                                  BorderThickness="0" Background="Transparent" MinHeight="0" Padding="0"
                                  MaxHeight="104" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                 PreviewMouseLeftButtonDown="MachineList_MouseDown"
+                                 PreviewMouseLeftButtonUp="MachineList_MouseUp"
                                  PreviewMouseMove="MachineList_MouseMove">
                             <ListBox.ItemsPanel>
                                 <ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate>
@@ -135,13 +143,42 @@
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="Margin" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Cursor" Value="Hand" />
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border BorderBrush="#DCE6EB" BorderThickness="1" Background="White"
-                                            CornerRadius="7" Margin="0,0,6,6" Padding="7"
+                                    <Border x:Name="MachineTile" CornerRadius="7" Margin="0,0,6,6" Padding="7"
+                                            PreviewMouseLeftButtonDown="MachineTile_MouseDown"
+                                            PreviewMouseLeftButtonUp="MachineList_MouseUp"
                                             ToolTip="{Binding Details}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderBrush" Value="#DCE6EB" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                                <Setter Property="Background" Value="White" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                                 Value="True">
+                                                        <Setter Property="BorderBrush" Value="#2074B4" />
+                                                        <Setter Property="BorderThickness" Value="2" />
+                                                        <Setter Property="Background" Value="#E8F4FD" />
+                                                    </DataTrigger>
+                                                    <Trigger Property="Tag" Value="True">
+                                                        <Setter Property="BorderBrush" Value="#2074B4" />
+                                                        <Setter Property="BorderThickness" Value="2" />
+                                                        <Setter Property="Background" Value="#E8F4FD" />
+                                                        <Setter Property="Cursor" Value="SizeAll" />
+                                                        <Setter Property="Effect">
+                                                            <Setter.Value>
+                                                                <DropShadowEffect BlurRadius="8" ShadowDepth="2"
+                                                                                  Opacity="0.25" Color="#2074B4" />
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <StackPanel Orientation="Horizontal">
                                             <Border Width="22" Height="22" CornerRadius="4" Background="#2074B4">
                                                 <UniformGrid Rows="2" Columns="2" Margin="5">
@@ -252,6 +289,7 @@
                                                             DragLeave="Cell_DragLeave" Drop="Cell_Drop"
                                                             PreviewMouseLeftButtonDown="Cell_MouseDown"
                                                             PreviewMouseMove="Cell_MouseMove"
+                                                            PreviewMouseLeftButtonUp="Cell_MouseUp"
                                                             ContextMenuService.IsEnabled="{Binding IsAssigned}"
                                                             AutomationProperties.Name="{Binding Name}">
                                                         <Border.ContextMenu>
@@ -315,6 +353,18 @@
                                                             <Setter TargetName="SlotTile" Property="Background" Value="#E8F4FD" />
                                                             <Setter TargetName="EmptyContent" Property="Content" Value="Drop here" />
                                                             <Setter TargetName="EmptyContent" Property="Foreground" Value="#2074B4" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDragSource}" Value="True">
+                                                            <Setter TargetName="SlotTile" Property="BorderBrush" Value="#2074B4" />
+                                                            <Setter TargetName="SlotTile" Property="BorderThickness" Value="2" />
+                                                            <Setter TargetName="SlotTile" Property="Background" Value="#E8F4FD" />
+                                                            <Setter TargetName="SlotTile" Property="Cursor" Value="SizeAll" />
+                                                            <Setter TargetName="SlotTile" Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect BlurRadius="8" ShadowDepth="2"
+                                                                                      Opacity="0.25" Color="#2074B4" />
+                                                                </Setter.Value>
+                                                            </Setter>
                                                         </DataTrigger>
                                                     </DataTemplate.Triggers>
                                                 </DataTemplate>
