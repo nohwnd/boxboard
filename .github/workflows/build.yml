@@ -42,13 +42,17 @@ jobs:
       - name: Publish Boxboard (self-contained)
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          $tag = $env:RELEASE_TAG
+          if (-not $tag -and $env:GITHUB_REF -like 'refs/tags/v*') {
+            $tag = $env:GITHUB_REF_NAME
+          }
           $version = '0.0.0-dev'
-          if ($env:RELEASE_TAG -match '^v(\d+\.\d+\.\d+)$') {
+          if ($tag -match '^v(\d+\.\d+\.\d+)$') {
             $version = $Matches[1]
-          } elseif ($env:RELEASE_TAG) {
-            throw "Invalid release tag: $env:RELEASE_TAG"
+          } elseif ($tag) {
+            throw "Invalid release tag: $tag"
           }
           dotnet publish Boxboard/Boxboard.csproj -c Release -r win-x64 --self-contained "-p:Version=$version" -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/boxboard -bl:publish-boxboard.binlog
 
