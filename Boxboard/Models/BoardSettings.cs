@@ -34,6 +34,7 @@ public sealed record BoardSettings
     public string? PrimaryMonitorId { get; init; }
     public int PrimaryMonitorNumber { get; init; }
     public bool PrimaryKeepConnected { get; init; } = true;
+    public bool StartWithWindows { get; init; }
     public WindowLayoutMode PrimaryLayoutMode { get; init; } = WindowLayoutMode.Quadrants;
     public List<DesktopLayout> DesktopLayouts { get; init; } = [];
     public List<DevBoxInstance> Machines { get; init; } = [];

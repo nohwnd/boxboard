@@ -37,23 +37,17 @@ Copy-Item .\Boxboard.exe, .\LICENSE.txt, .\THIRD_PARTY_LICENSE.txt -Destination 
 & (Join-Path $install 'Boxboard.exe')
 ```
 
-Boxboard does **not** start automatically when you sign in. To opt in, make
-a shortcut in your Startup folder:
-
-```powershell
-$install = Join-Path $env:LOCALAPPDATA 'Programs\Boxboard'
-$startup = [Environment]::GetFolderPath('Startup')
-$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut(
-    (Join-Path $startup 'Boxboard.lnk'))
-$shortcut.TargetPath = Join-Path $install 'Boxboard.exe'
-$shortcut.WorkingDirectory = $install
-$shortcut.Save()
-```
+On a fresh installation, **Start with Windows** is enabled by default. Boxboard
+registers itself only for your Windows account; clear the checkbox under its
+title to opt out. Existing settings keep their previous startup behavior until
+you change the checkbox. If you previously made a Startup-folder shortcut,
+remove that shortcut before enabling the checkbox to avoid starting twice.
 
 To update, close Boxboard, replace the three files in the install folder,
 and run the new executable. Your assignments remain in the separate settings
 file. Closing Boxboard does not close Windows App clients. To uninstall,
-close Boxboard and remove its install folder and optional Startup shortcut.
+close Boxboard, clear **Start with Windows**, and remove its install folder
+and any older Startup shortcut.
 Delete `%LOCALAPPDATA%\Boxboard` only if you also want to lose the saved
 assignments.
 
@@ -79,7 +73,13 @@ assignments.
   the only external monitor if there is exactly one, or the primary monitor,
   and records the choice in its log. If a pinned monitor is
   disconnected, its card stays with the assignments saved but cannot be edited
-  until the monitor is back.
+  until the monitor is back. Disconnected monitor cards without assignments
+  are hidden. Cards with assignments shrink to a warning. While a monitor is
+  disconnected, already-open assigned windows temporarily share the active
+  primary monitor with its own windows, tiled together per virtual desktop.
+  When the monitor returns, each layout returns to its saved monitor without
+  changing its assignments. No new connections are requested solely because
+  a display disconnected.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
   using the graphical preview cards on each monitor card. One window fills that
   monitor's usable work area like a maximized window; Windows App keeps its

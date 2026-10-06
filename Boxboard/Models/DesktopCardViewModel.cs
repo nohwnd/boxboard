@@ -18,6 +18,8 @@ public sealed class DesktopCardViewModel
     public int MonitorNumber { get; init; }
     public string MonitorName { get; init; } = "Any monitor";
     public string MonitorDetails { get; init; } = "";
+    public bool IsDisconnected { get; init; }
+    public string DisconnectedWarning { get; init; } = "";
     public LayoutKey Key => new(DesktopId, MonitorId);
     public required WindowLayoutMode Mode { get; init; }
     public required bool KeepConnected { get; init; }
@@ -39,7 +41,9 @@ public sealed class DesktopGroupViewModel
     public required string Name { get; init; }
     public required bool Available { get; init; }
     public required IReadOnlyList<DesktopCardViewModel> Cards { get; init; }
+    public int DisconnectedCount => Cards.Count(card => card.IsDisconnected);
     public string Summary => Available
-        ? $"{Cards.Count} monitor{(Cards.Count == 1 ? "" : "s")}"
+        ? $"{Cards.Count - DisconnectedCount} monitor{(Cards.Count - DisconnectedCount == 1 ? "" : "s")}" +
+          (DisconnectedCount == 0 ? "" : $" · {DisconnectedCount} disconnected with assignments")
         : "Desktop unavailable";
 }
