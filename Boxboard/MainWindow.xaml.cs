@@ -22,18 +22,23 @@ public partial class MainWindow : Window
 {
     internal const string MachineDragFormat = "Boxboard.DevBoxIdentity";
     private readonly SlotBoard _board;
+    private readonly string _settingsPath;
     private readonly bool _demo;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DevBoxDiscovery? _discovery;
     private readonly DevBoxLauncher? _launcher;
     private NativeSessionWindows? _windows;
     private readonly Dictionary<LayoutKey, LayoutRuntime> _layouts = [];
+    private readonly Dictionary<Guid, PixelRect> _fallbackBounds = [];
+    private HashSet<LayoutKey> _fallbackKeys = [];
+    private HashSet<LayoutKey> _fallbackHosts = [];
+    private bool _displayChangePending;
     private IReadOnlyList<VirtualDesktopInfo> _desktopChoices = [];
     private IReadOnlyList<MonitorInfo> _monitorChoices = [];
     private readonly IMonitors _monitors;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(750) };
     private bool _busy, _arranging, _closeRequested, _loadedOnce;
-    private string? _operationError;
+    private string? _operationError, _startupError;
     private Point _dragStart;
     private CellViewModel? _pressedCell;
     private UIElement? _pressedTile;
@@ -67,6 +72,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _board = board;
+        _settingsPath = path;
         _demo = demo;
         _monitors = monitors ?? MonitorShell.Instance;
         _log = new ActivityLog(Dispatcher);
@@ -83,6 +89,8 @@ public partial class MainWindow : Window
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? throw new InvalidOperationException("The Boxboard build version is unavailable."));
         ReapplyAllButton.IsEnabled = !demo;
+        StartWithWindowsCheckBox.IsEnabled = !demo;
+        StartWithWindowsCheckBox.IsChecked = !demo && board.Settings.StartWithWindows;
         Title = demo ? "Boxboard - OFFLINE DEMO" : "Boxboard";
         _log.Write("Boxboard", demo ? "Offline demo opened; no real clients will be controlled." :
             "Board opened. Keep connected may request missing assigned clients when enabled.");
@@ -102,6 +110,35 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(version))
             throw new ArgumentException("The build version cannot be empty.", nameof(informationalVersion));
         return version == "0.0.0-dev" ? "dev" : $"v{version}";
+    }
+
+    internal void ReportStartupError(string message)
+    {
+        _startupError = message;
+        _log.Write("Error", message);
+        ShowError();
+    }
+
+    private async void StartWithWindows_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_loadedOnce || _demo || sender is not CheckBox box ||
+            _board.Settings.StartWithWindows == (box.IsChecked == true))
+            return;
+        var enabled = box.IsChecked == true;
+        await RunAsync(async () =>
+        {
+            var previous = _board.Settings.StartWithWindows;
+            StartupRegistration.Apply(enabled, _settingsPath);
+            try { await _board.SetStartWithWindowsAsync(enabled, _lifetime.Token); }
+            catch
+            {
+                StartupRegistration.Apply(previous, _settingsPath);
+                throw;
+            }
+            _startupError = null;
+            _log.Write("Startup", $"Start with Windows {(enabled ? "enabled" : "disabled")}.");
+        });
+        StartWithWindowsCheckBox.IsChecked = _board.Settings.StartWithWindows;
     }
 
     private void Render()
@@ -138,11 +175,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The monitor cards to show under one virtual desktop.</summary>
+    private LayoutKey KeyForMonitor(Guid desktopId, MonitorInfo monitor) =>
+        _board.Layouts.FirstOrDefault(layout => layout.DesktopId == desktopId &&
+            string.Equals(layout.MonitorId, monitor.Id, StringComparison.OrdinalIgnoreCase))?.Key ??
+        new LayoutKey(desktopId, monitor.Id);
+
     private IReadOnlyList<CardTarget> CardTargets(Guid desktopId)
     {
         var saved = _board.Layouts.Where(layout => layout.DesktopId == desktopId).ToList();
-        var connected = _monitorChoices
-            .Select(monitor => new CardTarget(new(desktopId, monitor.Id), monitor.Number,
+        var connected = _monitorChoices.Where(monitor => monitor.Available)
+            .Select(monitor => new CardTarget(KeyForMonitor(desktopId, monitor), monitor.Number,
                 monitor.Name, monitor.Description, Available: true))
             .ToList();
         var unpinned = saved.Where(layout => layout.MonitorId is null)
@@ -150,7 +192,8 @@ public partial class MainWindow : Window
                 "Follows the monitor Boxboard is on", Available: true));
         var disconnected = saved
             .Where(layout => layout.MonitorId is not null &&
-                connected.All(card => card.Key != layout.Key))
+                connected.All(card => card.Key != layout.Key) &&
+                _board.GetSlots(layout.Key).Any(slot => slot.MachineId is not null))
             .Select(layout =>
             {
                 var gone = new MonitorInfo(layout.MonitorId!, layout.MonitorNumber,
@@ -200,6 +243,12 @@ public partial class MainWindow : Window
             DesktopId = desktop.Id, Name = desktop.Name, Mode = mode,
             MonitorId = key.MonitorId, MonitorNumber = target.MonitorNumber,
             MonitorName = target.MonitorName, MonitorDetails = target.MonitorDetails,
+            IsDisconnected = !target.Available,
+            DisconnectedWarning = !target.Available
+                ? $"{slots.Count(slot => slot.MachineId is not null)} saved Dev Box(es). " +
+                  (desktop.Available ? "Open clients temporarily use the primary monitor." :
+                      "The desktop is unavailable; assignments are preserved.")
+                : "",
             KeepConnected = primaryDemo || !known ? false : _board.IsKeepConnected(key),
             CanEdit = !_demo && available && runtime is not null,
             CanChooseLayout = known && available && (_demo || runtime is not null),
@@ -293,7 +342,7 @@ public partial class MainWindow : Window
 
     private void ShowError()
     {
-        var error = _operationError ?? _board.RefreshError ?? _trayError;
+        var error = _operationError ?? _startupError ?? _board.RefreshError ?? _trayError;
         ErrorText.Text = error ?? "";
         ErrorText.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -305,6 +354,7 @@ public partial class MainWindow : Window
         _busy = true;
         DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled =
             ReapplyAllButton.IsEnabled = false;
+        StartWithWindowsCheckBox.IsEnabled = false;
         _operationError = null;
         try
         {
@@ -322,6 +372,9 @@ public partial class MainWindow : Window
             _busy = false;
             DesktopCards.IsEnabled = MachineList.IsEnabled = RefreshButton.IsEnabled = true;
             ReapplyAllButton.IsEnabled = !_demo;
+            StartWithWindowsCheckBox.IsEnabled = !_demo;
+            if (_displayChangePending && !_closeRequested)
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _ = ApplyDisplayChange()));
             if (_closeRequested)
                 Close();
         }
@@ -371,7 +424,7 @@ public partial class MainWindow : Window
                 initialChoice = known;
             }
             await PinSavedLayoutsAsync(boardMonitor);
-            var initialKey = new LayoutKey(initialChoice.Id, boardMonitor.Id);
+            var initialKey = KeyForMonitor(initialChoice.Id, boardMonitor);
             await _board.SelectDesktopAsync(initialKey, initialChoice.Name, boardMonitor.Number, _lifetime.Token);
             if (!hadPrimaryDesktop)
                 _log.Write("Desktop", $"Linked the legacy slot assignments to {initialChoice.Name} ({initialChoice.Id}).");
@@ -388,6 +441,7 @@ public partial class MainWindow : Window
             _log.Write("Window integration", "Monitoring msrdc window metadata. Only explicitly bound or requested replacement windows can be arranged.");
             _timer.Tick += async (_, _) => await UpdateSessionsAsync();
             _timer.Start();
+            await RunAsync(ReconcileDisplayFailoverAsync);
             await UpdateSessionsAsync();
         }
         catch (Exception ex)
@@ -514,7 +568,8 @@ public partial class MainWindow : Window
     /// <summary>Every desktop and monitor combination that should have a layout card.</summary>
     private IEnumerable<LayoutKey> LayoutKeys() => _desktopChoices
         .Where(desktop => desktop.Available)
-        .SelectMany(desktop => _monitorChoices.Select(monitor => new LayoutKey(desktop.Id, monitor.Id)));
+        .SelectMany(desktop => _monitorChoices.Where(monitor => monitor.Available)
+            .Select(monitor => KeyForMonitor(desktop.Id, monitor)));
 
     /// <summary>
     /// A running assigned client identifies its monitor. Without one, prefer a single
@@ -572,7 +627,9 @@ public partial class MainWindow : Window
     /// </summary>
     private PixelRect PinnedWorkArea(LayoutKey key, PixelRect lastKnown) =>
         key.MonitorId is { } id
-            ? _monitorChoices.FirstOrDefault(monitor => monitor.Id == id)?.WorkArea ?? lastKnown
+            ? _monitorChoices.FirstOrDefault(monitor => monitor.Available &&
+                string.Equals(monitor.Id, id, StringComparison.OrdinalIgnoreCase))?.WorkArea ??
+              MonitorFailover.Destination(_monitorChoices, key)!.WorkArea
             : lastKnown;
 
     private LayoutRuntime GetOrCreateLayout(LayoutKey key)
@@ -581,8 +638,10 @@ public partial class MainWindow : Window
             return existing;
         var manager = _windows ?? throw new InvalidOperationException("Window integration is unavailable.");
         var initialArea = key.MonitorId is { } monitorId
-            ? (_monitorChoices.FirstOrDefault(monitor => monitor.Id == monitorId)
-                ?? throw new InvalidOperationException("The pinned monitor is not connected.")).WorkArea
+            ? (_monitorChoices.FirstOrDefault(monitor => monitor.Available &&
+                string.Equals(monitor.Id, monitorId, StringComparison.OrdinalIgnoreCase))
+                ?? MonitorFailover.Destination(_monitorChoices, key) ??
+                throw new InvalidOperationException("The pinned monitor is unavailable.")).WorkArea
             : LegacyWorkArea(manager, key) ?? manager.MonitorWorkArea();
         var desktopId = key.DesktopId;
         PixelRect Area() => PinnedWorkArea(key, initialArea);
@@ -590,8 +649,6 @@ public partial class MainWindow : Window
             VirtualDesktopShell.GetCurrentDesktopId,
             async (window, bounds, ct) =>
             {
-                if (key.MonitorId is { } pinned && _monitorChoices.All(monitor => monitor.Id != pinned))
-                    throw new InvalidOperationException("The pinned monitor is not connected; no client was moved.");
                 // The pinned work area is the placement target even when the client currently
                 // sits on another monitor, so moving it across monitors is allowed.
                 using var client = new NativeSessionWindows(window.Identity.Handle, Area());
@@ -629,35 +686,37 @@ public partial class MainWindow : Window
             _log.Write("Windows session",
                 "Locked; pending requests cancelled. Keep connected may request missing clients after unlock.");
         }
-        // WM_DISPLAYCHANGE: monitors were added, removed, or resized, so the pinned work
-        // areas are stale. Re-read them before the next placement runs.
-        else if (message == 0x007E)
+        else if (message == 0x02B1 && (int)wParam == 8)
+        {
+            _displayChangePending = true;
             Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _ = ApplyDisplayChange()));
+        }
+        // WM_DISPLAYCHANGE: monitor topology or work areas changed.
+        else if (message == 0x007E)
+        {
+            _displayChangePending = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _ = ApplyDisplayChange()));
+        }
         return 0;
     }
 
     private async Task ApplyDisplayChange()
     {
-        if (_demo || _windows is null || _closeRequested)
+        if (_demo || _windows is null || _closeRequested || !_displayChangePending || _busy)
             return;
-        try
+        await RunAsync(async () =>
         {
+            _displayChangePending = false;
+            await Task.Delay(300, _lifetime.Token);
             var previous = _monitorChoices;
             _monitorChoices = _monitors.GetMonitors();
-            if (previous.SequenceEqual(_monitorChoices))
-                return;
-            _log.Write("Monitors", "Display layout changed: " +
-                string.Join(", ", _monitorChoices.Select(monitor => $"{monitor.Name} ({monitor.Description})")) +
-                ". Pinned layouts now use the new work areas.");
-            Render();
-            await RunAsync(EnsureMonitorLayoutsAsync);
-        }
-        catch (Exception ex)
-        {
-            _operationError = $"Could not read the new display layout: {ex.Message}";
-            _log.Write("Error", _operationError);
-            ShowError();
-        }
+            if (!previous.SequenceEqual(_monitorChoices))
+                _log.Write("Monitors", "Display layout changed: " +
+                    string.Join(", ", _monitorChoices.Select(monitor => $"{monitor.Name} ({monitor.Description})")) +
+                    ". Rechecking saved layouts and temporary placement.");
+            await EnsureMonitorLayoutsAsync();
+            await ReconcileDisplayFailoverAsync();
+        });
     }
 
     /// <summary>Gives every available desktop and connected monitor a saved layout and a runtime.</summary>
@@ -667,7 +726,8 @@ public partial class MainWindow : Window
         foreach (var key in LayoutKeys().ToList())
         {
             var desktop = _desktopChoices.Single(choice => choice.Id == key.DesktopId);
-            var monitor = _monitorChoices.Single(item => item.Id == key.MonitorId);
+            var monitor = _monitorChoices.Single(item =>
+                string.Equals(item.Id, key.MonitorId, StringComparison.OrdinalIgnoreCase));
             if (!_board.HasLayout(key))
             {
                 await _board.SelectDesktopAsync(key, desktop.Name, monitor.Number, _lifetime.Token);
@@ -675,10 +735,112 @@ public partial class MainWindow : Window
             }
             GetOrCreateLayout(key);
         }
+        foreach (var layout in _board.Layouts.Where(layout =>
+            _desktopChoices.Any(desktop => desktop.Id == layout.DesktopId && desktop.Available) &&
+            layout.MonitorId is not null && _monitorChoices.All(monitor =>
+                !monitor.Available ||
+                !string.Equals(monitor.Id, layout.MonitorId, StringComparison.OrdinalIgnoreCase)) &&
+            _board.GetVisibleSlots(layout.Key).Any(slot => slot.MachineId is not null)))
+            GetOrCreateLayout(layout.Key);
         if (selected is { } previous && _board.HasLayout(previous))
         {
             var layout = _board.Layouts.Single(item => item.Key == previous);
             await _board.SelectDesktopAsync(previous, layout.Name, layout.MonitorNumber, _lifetime.Token);
+        }
+    }
+
+    private async Task ReconcileDisplayFailoverAsync()
+    {
+        var previousKeys = _fallbackKeys;
+        var previousHosts = _fallbackHosts;
+        var fallback = _board.Layouts.Where(layout =>
+            layout.MonitorId is not null &&
+            _desktopChoices.Any(desktop => desktop.Id == layout.DesktopId && desktop.Available) &&
+            _board.GetVisibleSlots(layout.Key).Any(slot => slot.MachineId is not null) &&
+            MonitorFailover.Destination(_monitorChoices, layout.Key) is not null)
+            .Select(layout => layout.Key).ToHashSet();
+        if (previousKeys.Count == 0 && fallback.Count == 0)
+            return;
+        if (_windows is null || !_windows.GetEnvironment().CanInteract)
+            throw new InvalidOperationException("Windows is locked; display recovery will retry after unlock.");
+
+        var primary = _monitorChoices.Single(monitor => monitor.Available && monitor.Primary);
+        var hosts = fallback.Select(key => KeyForMonitor(key.DesktopId, primary)).ToHashSet();
+        var boundsBySlot = new Dictionary<Guid, PixelRect>();
+        var failures = new List<string>();
+        var affectedDesktops = fallback.Concat(previousKeys).Select(key => key.DesktopId).Distinct().ToList();
+        foreach (var desktopId in affectedDesktops)
+        {
+            var missing = fallback.Where(key => key.DesktopId == desktopId).ToList();
+            var host = KeyForMonitor(desktopId, primary);
+            if (missing.Count > 0)
+            {
+                var keys = new[] { host }.Concat(missing).Distinct()
+                    .Where(_board.HasLayout).ToList();
+                var placements = MonitorFailover.Combine(primary.WorkArea, [.. keys.Select(key =>
+                    (key, _board.GetVisibleSlots(key)))]);
+                foreach (var placement in placements)
+                {
+                    boundsBySlot.Add(placement.Slot.Id, placement.Bounds);
+                    await ArrangeExistingAsync(placement.Key, placement.Slot, placement.Bounds, failures);
+                }
+                _log.Write("Monitors", $"{placements.Count} assigned slots on desktop {desktopId} " +
+                    $"temporarily share {primary.Name}; saved monitor pins were not changed.");
+            }
+            var restore = previousKeys.Concat(previousHosts)
+                .Where(key => key.DesktopId == desktopId && !missing.Contains(key) &&
+                    (missing.Count == 0 || key != host) && _board.HasLayout(key) &&
+                    key.MonitorId is not null &&
+                    _monitorChoices.Any(monitor => monitor.Available &&
+                        string.Equals(monitor.Id, key.MonitorId, StringComparison.OrdinalIgnoreCase)))
+                .Distinct();
+            foreach (var key in restore)
+            {
+                var monitor = _monitorChoices.Single(item =>
+                    string.Equals(item.Id, key.MonitorId, StringComparison.OrdinalIgnoreCase));
+                var slots = _board.GetVisibleSlots(key);
+                var bounds = WindowLayoutGeometry.Divide(monitor.WorkArea, _board.GetLayoutMode(key));
+                for (int index = 0; index < slots.Count; index++)
+                    if (slots[index].MachineId is not null)
+                        await ArrangeExistingAsync(key, slots[index], bounds[index], failures);
+                _log.Write("Monitors", $"{LayoutName(key)} returned to its saved {monitor.Name}.");
+            }
+        }
+        _fallbackKeys = fallback;
+        _fallbackHosts = hosts;
+        _fallbackBounds.Clear();
+        foreach (var (slotId, bounds) in boundsBySlot)
+            _fallbackBounds.Add(slotId, bounds);
+        if (failures.Count > 0)
+            throw new InvalidOperationException("Display recovery could not place every assigned client: " +
+                string.Join("; ", failures));
+    }
+
+    private async Task ArrangeExistingAsync(LayoutKey key, SlotAssignment slot, PixelRect bounds,
+        List<string> failures)
+    {
+        try
+        {
+            var runtime = _layouts[key];
+            var machine = _board.GetMachine(slot.MachineId!);
+            var binding = runtime.Sessions.BindExisting([(slot, machine)], _board.Settings.Machines);
+            if (binding.Ambiguous.Count > 0 || binding.OtherDesktop.Count > 0)
+                throw new InvalidOperationException("The client is ambiguous or on another virtual desktop.");
+            if (binding.Missing.Count > 0)
+                return;
+            runtime.Sessions.InvalidatePlacements();
+            runtime.Sessions.Observe();
+            await runtime.Sessions.ArrangeAsync(slot, machine, NameIsUnique(machine.OriginalName),
+                bounds, _lifetime.Token);
+            if (runtime.Sessions.For(slot).Fullscreen)
+                throw new InvalidOperationException("The client is fullscreen; switch it to windowed mode.");
+            if (runtime.Sessions.For(slot).ReconnectPromptSuspected)
+                throw new InvalidOperationException("A reconnect prompt needs manual attention; the client was not moved.");
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            failures.Add($"{LayoutName(key)} / {slot.Name}: {ex.Message}");
         }
     }
 
@@ -823,7 +985,7 @@ public partial class MainWindow : Window
             .ToDictionary(card => card.Key);
         var skipped = assigned.Where(card => !available.ContainsKey(card.Key))
             .Select(card => $"{card.Name} · {card.MonitorName}").ToList();
-        if (available.Count == 0)
+        if (available.Count == 0 && _fallbackKeys.Count == 0)
             throw new InvalidOperationException(assigned.Count == 0
                 ? "No layouts have assigned Dev Boxes to re-apply."
                 : $"No assigned layouts are available. Disconnected: {string.Join(", ", skipped)}.");
@@ -833,11 +995,18 @@ public partial class MainWindow : Window
         var summary = $"Re-apply all: {result.Applied}/{available.Count} layout(s), " +
             $"{result.Bound} existing client(s) bound, {result.Moved} moved, " +
             $"{result.ConnectionRequests} connection(s) requested." +
-            (skipped.Count == 0 ? "" : $" Skipped unavailable: {string.Join(", ", skipped)}.");
+            (skipped.Count == 0 ? "" : $" Disconnected pins: {string.Join(", ", skipped)}.");
         _log.Write("Window integration", summary);
-        if (result.Failures.Count > 0)
-            throw new InvalidOperationException(summary + " Failed: " + string.Join("; ",
-                result.Failures.Select(failure => $"{LayoutName(failure.Key)}: {failure.Error.Message}")));
+        var failures = result.Failures.Select(failure =>
+            $"{LayoutName(failure.Key)}: {failure.Error.Message}").ToList();
+        if (_fallbackKeys.Count > 0)
+        {
+            try { await ReconcileDisplayFailoverAsync(); }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { throw; }
+            catch (Exception ex) { failures.Add(ex.Message); }
+        }
+        if (failures.Count > 0)
+            throw new InvalidOperationException(summary + " Failed: " + string.Join("; ", failures));
     });
 
     private void Identify_Click(object sender, RoutedEventArgs e) => IdentifyMonitors();
@@ -900,7 +1069,8 @@ public partial class MainWindow : Window
             {
                 var slots = _board.GetVisibleSlots(runtime.Key).ToList();
                 var card = Cards.SingleOrDefault(item => item.Key == runtime.Key);
-                if (card is null || !card.CanEdit)
+                var temporarilyPlaced = _fallbackKeys.Contains(runtime.Key);
+                if (card is null || (!card.CanEdit && !temporarilyPlaced))
                     continue;
                 var bounds = WindowLayoutGeometry.Divide(runtime.Windows.GetEnvironment().WorkArea,
                     _board.GetLayoutMode(runtime.Key));
@@ -923,7 +1093,7 @@ public partial class MainWindow : Window
                     var machine = _board.GetMachine(id);
                     assignments.Add((slot, machine));
                     await runtime.Sessions.ArrangeAsync(slot, machine, NameIsUnique(machine.OriginalName),
-                        bounds[index], _lifetime.Token);
+                        _fallbackBounds.GetValueOrDefault(slot.Id, bounds[index]), _lifetime.Token);
                     var cell = card.Cells[index];
                     cell.Windows = runtime.Sessions.Candidates(machine);
                     cell.Status = runtime.Sessions.For(slot).Status;
@@ -931,8 +1101,9 @@ public partial class MainWindow : Window
                         _board.Options.Single(option => SameId(option.UniqueId, id)).Available;
                     UpdateCellState(cell, runtime, available: true);
                 }
-                await runtime.KeepConnected.TickAsync(assignments, _board.Settings.Machines,
-                    _board.IsKeepConnected(runtime.Key), _lifetime.Token);
+                if (!temporarilyPlaced)
+                    await runtime.KeepConnected.TickAsync(assignments, _board.Settings.Machines,
+                        _board.IsKeepConnected(runtime.Key), _lifetime.Token);
                 for (int index = 0; index < slots.Count; index++)
                 {
                     var cell = card.Cells[index];

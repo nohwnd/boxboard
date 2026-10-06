@@ -118,6 +118,10 @@
                         <TextBlock x:Name="StatusText" FontSize="11" Foreground="#687B89" TextTrimming="CharacterEllipsis"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite" />
+                        <CheckBox x:Name="StartWithWindowsCheckBox" Content="Start with Windows"
+                                  FontSize="11" Foreground="#687B89" Margin="0,4,0,0"
+                                  Checked="StartWithWindows_Changed" Unchecked="StartWithWindows_Changed"
+                                  ToolTip="Start Boxboard at Windows sign-in for this user." />
                     </StackPanel>
                 </DockPanel>
                 <TextBlock x:Name="ErrorText" Grid.Row="1" Margin="4,0,4,8"
@@ -231,7 +235,7 @@
                                                 <Run Text="{Binding MonitorDetails, Mode=OneWay}" FontSize="11"
                                                      Foreground="#687B89" />
                                             </TextBlock>
-                                            <Button Grid.Column="1" Width="164" MinHeight="34" Padding="6,2"
+                                            <Button x:Name="LayoutPickerButton" Grid.Column="1" Width="164" MinHeight="34" Padding="6,2"
                                                     Margin="0,0,9,0" Content="{Binding SelectedMode}"
                                                     ContentTemplate="{StaticResource SelectedLayoutPreview}"
                                                     IsEnabled="{Binding CanChooseLayout}" Click="CardLayoutPicker_Click"
@@ -254,19 +258,32 @@
                                                     </ContextMenu>
                                                 </Button.ContextMenu>
                                             </Button>
-                                            <CheckBox Grid.Column="2" Content="Keep on" Margin="0,0,9,0"
+                                            <CheckBox x:Name="KeepConnectedCheckBox" Grid.Column="2" Content="Keep on" Margin="0,0,9,0"
                                                       VerticalAlignment="Center" IsEnabled="{Binding CanEdit}"
                                                       IsChecked="{Binding KeepConnected, Mode=OneWay}"
                                                       Checked="CardKeepConnected_Changed"
                                                       Unchecked="CardKeepConnected_Changed"
                                                       ToolTip="Relaunch missing assigned clients after a short delay." />
-                                            <Button Grid.Column="3" Content="Re-apply" Click="CardApply_Click"
+                                            <Button x:Name="CardReapplyButton" Grid.Column="3" Content="Re-apply" Click="CardApply_Click"
                                                     IsEnabled="{Binding CanEdit}"
                                                     MinHeight="27" Padding="10,3" Margin="0"
                                                     Background="#DCECF9"
                                                     ToolTip="Reposition all assigned clients and retry missing ones." />
                                         </Grid>
-                                        <TextBlock Text="Layout not applied. Resolve the error and re-apply."
+                                        <TextBlock Text="{Binding DisconnectedWarning}" Foreground="#90621F"
+                                                   FontSize="11" TextWrapping="Wrap" Margin="1,0,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDisconnected}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock x:Name="PendingApplyText" Text="Layout not applied. Resolve the error and re-apply."
                                                    Foreground="#7653A3" FontSize="11" Margin="2,0,0,5">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
@@ -279,7 +296,7 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <ItemsControl ItemsSource="{Binding Cells}" AlternationCount="4"
+                                        <ItemsControl x:Name="CardSlots" ItemsSource="{Binding Cells}" AlternationCount="4"
                                                       Style="{StaticResource DesktopSlots}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -370,7 +387,7 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <TextBlock Text="{Binding HiddenAssignments}" FontSize="11" Margin="2,2,0,0"
+                                        <TextBlock x:Name="HiddenAssignmentsText" Text="{Binding HiddenAssignments}" FontSize="11" Margin="2,2,0,0"
                                                    Foreground="#687B89" TextTrimming="CharacterEllipsis"
                                                    ToolTip="{Binding HiddenAssignments}">
                                             <TextBlock.Style>
@@ -386,6 +403,16 @@
                                         </TextBlock>
                                     </StackPanel>
                                 </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsDisconnected}" Value="True">
+                                                    <Setter TargetName="LayoutPickerButton" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="KeepConnectedCheckBox" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="CardReapplyButton" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="PendingApplyText" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="CardSlots" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="HiddenAssignmentsText" Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>

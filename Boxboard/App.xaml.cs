@@ -1,4 +1,5 @@
 using System.Windows;
+using Boxboard.Models;
 using Boxboard.Services;
 
 namespace Boxboard;
@@ -6,6 +7,10 @@ namespace Boxboard;
 public partial class App : Application
 {
     private SettingsStore? _store;
+
+    internal static BoardSettings InitialSettings(bool demo) => demo
+        ? DemoData.Settings()
+        : new BoardSettings { StartWithWindows = true };
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -23,8 +28,8 @@ public partial class App : Application
                 ? Path.Combine(Path.GetTempPath(), "Boxboard-demo", Guid.NewGuid().ToString("N"), "settings.json")
                 : customPath ?? SettingsStore.DefaultPath;
             _store = new SettingsStore(path);
-            if (demo)
-                await _store.SaveAsync(DemoData.Settings());
+            if (demo || !File.Exists(path))
+                await _store.SaveAsync(InitialSettings(demo));
             var board = new SlotBoard(_store);
             await board.LoadAsync();
             await board.EnsureFourCellsAsync();
@@ -32,6 +37,11 @@ public partial class App : Application
             MainWindow = window;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             window.Show();
+            if (!demo && board.Settings.StartWithWindows)
+            {
+                try { StartupRegistration.Apply(true, path); }
+                catch (Exception ex) { window.ReportStartupError($"Could not enable Start with Windows: {ex.Message}"); }
+            }
         }
         catch (Exception ex)
         {

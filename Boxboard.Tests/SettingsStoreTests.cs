@@ -39,6 +39,21 @@ public sealed class SettingsStoreTests
     }
 
     [TestMethod]
+    public async Task StartWithWindows_NewPreferencePersistsWithoutEnablingItForOldSettings()
+    {
+        using var store = new SettingsStore(SettingsPath);
+        await store.SaveAsync(DemoData.Settings());
+        var board = new SlotBoard(store);
+        await board.LoadAsync();
+        Assert.IsFalse(board.Settings.StartWithWindows);
+
+        await board.SetStartWithWindowsAsync(true);
+        Assert.IsTrue((await store.LoadAsync()).StartWithWindows);
+        await board.SetStartWithWindowsAsync(false);
+        Assert.IsFalse((await store.LoadAsync()).StartWithWindows);
+    }
+
+    [TestMethod]
     [DataRow("{broken")]
     [DataRow("null")]
     [DataRow("{\"version\":99}")]

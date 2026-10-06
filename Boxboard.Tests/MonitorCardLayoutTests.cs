@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Boxboard.Models;
 using Boxboard.Services;
@@ -111,6 +113,9 @@ public sealed class MonitorCardLayoutTests
         return WpfTestHost.RunAsync(async () =>
         {
             var (board, first, _) = await PinnedBoardAsync();
+            var disconnectedKey = new LayoutKey(first, Second);
+            await board.AssignAsync(disconnectedKey, board.GetVisibleSlots(disconnectedKey)[0].Id,
+                DemoData.Machines()[3].UniqueId, _ => true);
             var single = new FakeMonitors(TwoMonitors().GetMonitors()[0]);
             var window = new MainWindow(board, demo: true, "offline-layout", single);
             try
@@ -119,8 +124,57 @@ public sealed class MonitorCardLayoutTests
                 Assert.HasCount(2, cards);
                 Assert.AreEqual("Monitor 2", cards[1].MonitorName);
                 Assert.AreEqual("Disconnected", cards[1].MonitorDetails);
+                Assert.IsTrue(cards[1].IsDisconnected);
+                StringAssert.Contains(cards[1].DisconnectedWarning, "1 saved Dev Box");
+                Assert.AreEqual("1 monitor · 1 disconnected with assignments", window.Groups[0].Summary);
                 Assert.IsFalse(cards[1].CanEdit);
                 Assert.IsTrue(cards[1].Cells.All(cell => cell.StateText is "Empty" or "Desktop unavailable"));
+                Realize(window);
+                var disconnectedCard = MainWindow.Descendants<Border>(window.DesktopCards)
+                    .Single(border => border.DataContext == cards[1] && border.CornerRadius.TopLeft == 10);
+                Assert.IsLessThan(110.0, disconnectedCard.ActualHeight);
+                Capture(window, "disconnected-after");
+            }
+            finally { window.Close(); }
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task DisconnectedMonitor_EmptyLayoutsDoNotTakeCardSpace()
+    {
+        return WpfTestHost.RunAsync(async () =>
+        {
+            var (board, first, _) = await PinnedBoardAsync();
+            var window = new MainWindow(board, demo: true, "offline-layout",
+                new FakeMonitors(TwoMonitors().GetMonitors()[0]));
+            try
+            {
+                Assert.HasCount(1, window.Cards.Where(card => card.DesktopId == first).ToList());
+                Assert.IsTrue(window.Groups.All(group => group.Summary == "1 monitor"));
+                Assert.IsTrue(board.HasLayout(new LayoutKey(first, Second)));
+            }
+            finally { window.Close(); }
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task MonitorDevicePath_CaseChangeDoesNotCreateDisconnectedCards()
+    {
+        return WpfTestHost.RunAsync(async () =>
+        {
+            var (board, first, _) = await PinnedBoardAsync();
+            var monitors = TwoMonitors().GetMonitors().Select(monitor =>
+                monitor with { Id = monitor.Id.ToLowerInvariant() }).ToArray();
+            var window = new MainWindow(board, demo: true, "offline-layout", new FakeMonitors(monitors));
+            try
+            {
+                var cards = window.Cards.Where(card => card.DesktopId == first).ToList();
+                Assert.HasCount(2, cards);
+                Assert.IsTrue(cards.All(card => !card.IsDisconnected));
+                CollectionAssert.AreEqual(new[] { First, Second },
+                    cards.Select(card => card.MonitorId).ToArray());
             }
             finally { window.Close(); }
         }, TimeSpan.FromSeconds(20));
@@ -241,6 +295,21 @@ public sealed class MonitorCardLayoutTests
         root.Measure(new Size(680, window.MaxHeight));
         root.Arrange(new Rect(0, 0, 680, Math.Clamp(root.DesiredSize.Height, window.MinHeight, window.MaxHeight)));
         root.UpdateLayout();
+    }
+
+    private static void Capture(MainWindow window, string name)
+    {
+        var directory = Environment.GetEnvironmentVariable("BOXBOARD_SCREENSHOT_DIR");
+        if (string.IsNullOrWhiteSpace(directory)) return;
+        Directory.CreateDirectory(directory);
+        var root = (FrameworkElement)window.Content;
+        var bitmap = new RenderTargetBitmap((int)root.ActualWidth, (int)root.ActualHeight,
+            96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(root);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(Path.Combine(directory, name + ".png"));
+        encoder.Save(stream);
     }
 
     private static async Task SettleAsync(Window window)

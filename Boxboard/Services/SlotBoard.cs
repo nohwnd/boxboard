@@ -118,6 +118,9 @@ public sealed class SlotBoard(ISettingsStore store)
         return SetKeepConnectedAsync(selected, enabled, ct);
     }
 
+    public Task SetStartWithWindowsAsync(bool enabled, CancellationToken ct = default) =>
+        ChangeAsync(settings => settings with { StartWithWindows = enabled }, ct);
+
     public Task SetKeepConnectedAsync(LayoutKey key, bool enabled, CancellationToken ct = default)
     {
         if (IsKeepConnected(key) == enabled && Settings.Version >= 3)

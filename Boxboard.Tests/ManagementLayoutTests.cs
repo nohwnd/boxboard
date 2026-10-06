@@ -99,6 +99,7 @@ public sealed class ManagementLayoutTests
                 Assert.AreEqual(680, window.Width);
                 Assert.AreEqual("Re-apply all", window.ReapplyAllButton.Content);
                 Assert.IsFalse(window.ReapplyAllButton.IsEnabled);
+                Assert.IsFalse(window.StartWithWindowsCheckBox.IsEnabled);
                 Assert.AreEqual("dev", window.VersionText.Text);
                 Assert.IsTrue(root.ActualHeight >= window.MinHeight &&
                     root.ActualHeight <= window.MaxHeight,
