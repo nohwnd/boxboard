@@ -79,7 +79,8 @@ assignments.
   primary monitor with its own windows, tiled together per virtual desktop.
   When the monitor returns, each layout returns to its saved monitor without
   changing its assignments. No new connections are requested solely because
-  a display disconnected.
+  a display disconnected; use **Re-apply all** to request missing assigned
+  clients on the primary monitor.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
   using the graphical preview cards on each monitor card. One window fills that
   monitor's usable work area like a maximized window; Windows App keeps its

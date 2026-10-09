@@ -126,6 +126,7 @@ public sealed class MonitorCardLayoutTests
                 Assert.AreEqual("Disconnected", cards[1].MonitorDetails);
                 Assert.IsTrue(cards[1].IsDisconnected);
                 StringAssert.Contains(cards[1].DisconnectedWarning, "1 saved Dev Box");
+                StringAssert.Contains(cards[1].DisconnectedWarning, "Re-apply all to start missing clients");
                 Assert.AreEqual("1 monitor · 1 disconnected with assignments", window.Groups[0].Summary);
                 Assert.IsFalse(cards[1].CanEdit);
                 Assert.IsTrue(cards[1].Cells.All(cell => cell.StateText is "Empty" or "Desktop unavailable"));
