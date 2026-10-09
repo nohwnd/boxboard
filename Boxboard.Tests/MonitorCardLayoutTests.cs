@@ -161,6 +161,38 @@ public sealed class MonitorCardLayoutTests
 
     [TestMethod]
     [DoNotParallelize]
+    public Task PhysicalMonitorMigration_ShowsSavedAssignmentsOnConnectedCard()
+    {
+        return WpfTestHost.RunAsync(async () =>
+        {
+            var (board, first, _) = await PinnedBoardAsync();
+            var monitor = TwoMonitors().GetMonitors()[0] with
+            {
+                Id = "edid:physical-monitor",
+                StableIdentity = true
+            };
+            var result = await MonitorPinMigration.MigrateAsync(board, [monitor],
+                old => old == First ? monitor.Id : null);
+            Assert.AreEqual(1, result.Migrated);
+
+            var window = new MainWindow(board, demo: true, "offline-layout",
+                new FakeMonitors(monitor));
+            try
+            {
+                var cards = window.Cards.Where(card => card.DesktopId == first).ToList();
+                Assert.HasCount(1, cards);
+                Assert.AreEqual(monitor.Id, cards[0].MonitorId);
+                Assert.IsFalse(cards[0].IsDisconnected);
+                Assert.HasCount(3, cards[0].Cells.Where(cell => cell.IsAssigned).ToList());
+                Realize(window);
+                Capture(window, "recovered-physical-monitor");
+            }
+            finally { window.Close(); }
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
     public Task MonitorDevicePath_CaseChangeDoesNotCreateDisconnectedCards()
     {
         return WpfTestHost.RunAsync(async () =>

@@ -63,11 +63,12 @@ assignments.
   returning the replaced one to the tray without closing its client.
 - **Identify monitors** shows each monitor's number on that monitor for a few
   seconds. Boxboard numbers monitors from left to right, so use this to tell
-  which card is which before dragging Dev Boxes into it. A Dev Box stays pinned
-  to its monitor if the numbering shifts, as long as Windows continues to
-  report the same monitor device path. If Windows does not provide a device
-  path, the card says **pin may change** because the fallback uses a temporary
-  display name.
+  which card is which before dragging Dev Boxes into it. When the monitor
+  provides a unique hardware serial, its pin survives changes to the Windows
+  display number and device path. Older device-path pins with assignments are
+  matched to the same physical monitor on startup without changing their
+  slots. If no unique hardware identity is available, the card says
+  **pin may change**.
 - Layouts saved by an earlier version are pinned automatically on first start:
   a running assigned client identifies the monitor. Otherwise, Boxboard picks
   the only external monitor if there is exactly one, or the primary monitor,
@@ -81,6 +82,9 @@ assignments.
   changing its assignments. No new connections are requested solely because
   a display disconnected; use **Re-apply all** to request missing assigned
   clients on the primary monitor.
+- Missing virtual desktops with no assigned Dev Boxes are hidden; layouts
+  with assignments remain visible for recovery. **Keep on** still starts
+  missing clients automatically when their saved physical monitor is active.
 - Choose **2 × 2**, **Side by side**, **Large left + 2**, or **One window**
   using the graphical preview cards on each monitor card. One window fills that
   monitor's usable work area like a maximized window; Windows App keeps its
@@ -92,8 +96,9 @@ assignments.
   **Re-apply** explicitly snaps all visible assigned windows back to their
   slots, including windows you have manually resized, and retries missing
   clients. **Re-apply all** does the same for every available desktop and
-  monitor card with assignments; disconnected layouts are skipped without
-  losing their assignments. If one card fails, Boxboard continues with the
+  monitor card with assignments. It also requests missing clients for a
+  genuinely disconnected monitor on the active primary monitor, without
+  changing the saved pin. If one card fails, Boxboard continues with the
   others and reports the failure in the Log. For a newly opened Windows App
   client, Boxboard can correct late sizing changes during its first 15 seconds;
   it leaves later manual window positions alone.

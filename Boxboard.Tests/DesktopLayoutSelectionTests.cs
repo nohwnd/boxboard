@@ -38,4 +38,14 @@ public sealed class DesktopLayoutSelectionTests
         Assert.AreEqual(Target, DesktopLayoutSelection.ChooseInitialDesktop(settings, Manager,
             [Client(1, "azdo1", Manager)]));
     }
+
+    [TestMethod]
+    public void MissingDesktop_IsHiddenOnlyWhenItHasNoAssignedDevBoxes()
+    {
+        var missing = new VirtualDesktopInfo(0, Target, "Desktop 2 (missing)", false);
+        Assert.IsFalse(DesktopLayoutSelection.ShowDesktop(missing, new HashSet<Guid>()));
+        Assert.IsTrue(DesktopLayoutSelection.ShowDesktop(missing, new HashSet<Guid> { Target }));
+        Assert.IsTrue(DesktopLayoutSelection.ShowDesktop(
+            missing with { Available = true }, new HashSet<Guid>()));
+    }
 }

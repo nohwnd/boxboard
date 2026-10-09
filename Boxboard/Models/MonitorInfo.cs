@@ -1,8 +1,8 @@
 namespace Boxboard.Models;
 
 /// <summary>
-/// A physical display. <see cref="Id"/> is its monitor device path when Windows
-/// provides one, not the session-dependent GDI name (for example \\.\DISPLAY1).
+/// A display. <see cref="Id"/> is a hardware fingerprint when EDID provides
+/// a serial number, otherwise a temporary device path or GDI name.
 /// </summary>
 public sealed record MonitorInfo(string Id, int Number, PixelRect Bounds, PixelRect WorkArea,
     bool Primary, bool Available = true)

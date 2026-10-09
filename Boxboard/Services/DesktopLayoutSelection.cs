@@ -4,6 +4,10 @@ namespace Boxboard.Services;
 
 public static class DesktopLayoutSelection
 {
+    internal static bool ShowDesktop(VirtualDesktopInfo desktop,
+        IReadOnlySet<Guid> desktopsWithAssignments) =>
+        desktop.Available || desktopsWithAssignments.Contains(desktop.Id);
+
     public static Guid ChooseInitialDesktop(BoardSettings settings, Guid managerDesktop,
         IReadOnlyList<SessionWindow> observed)
     {

@@ -6,8 +6,8 @@ namespace Boxboard.Services;
 
 /// <summary>
 /// Numbers the active displays from left to right. DisplayConfig maps the temporary
-/// GDI source name to a monitor device path that survives DISPLAY number changes
-/// while Windows continues to report that same device path.
+/// GDI source name to a monitor device path, then a physical EDID identity
+/// when the monitor provides a unique hardware serial.
 /// </summary>
 public sealed partial class MonitorShell : IMonitors
 {
@@ -48,7 +48,8 @@ public sealed partial class MonitorShell : IMonitors
                 throw new Win32Exception(Marshal.GetLastPInvokeError());
             var gdiName = ReadDevice(info);
             var identity = identities.TryGetValue(gdiName, out var mapped)
-                ? mapped : new DisplayIdentity(PersistentId(gdiName, null), null, false);
+                ? mapped : new DisplayIdentity(PersistentId(gdiName, null), null, false,
+                    PersistentId(gdiName, null));
             found.Add((identity.Id, info.Monitor.ToPixels(), info.Work.ToPixels(), (info.Flags & 1) != 0));
             if (!metadata.TryAdd(identity.Id, (gdiName, identity.IsBuiltIn, identity.Stable)))
                 throw new InvalidOperationException("Windows reported duplicate monitor device names.");
@@ -74,7 +75,7 @@ public sealed partial class MonitorShell : IMonitors
         (Marshal.SizeOf<DisplayConfigPath>(), Marshal.SizeOf<DisplayConfigMode>(),
             Marshal.SizeOf<DisplayConfigSourceName>(), Marshal.SizeOf<DisplayConfigTargetName>());
 
-    private readonly record struct DisplayIdentity(string Id, bool? IsBuiltIn, bool Stable);
+    private readonly record struct DisplayIdentity(string Id, bool? IsBuiltIn, bool Stable, string FallbackId);
 
     private static Dictionary<string, DisplayIdentity> ReadMonitorIdentities()
     {
@@ -118,13 +119,25 @@ public sealed partial class MonitorShell : IMonitors
                 var technology = path.Target.OutputTechnology;
                 bool? isBuiltIn = technology == 0x80000000 ? true :
                     technology is 0xFFFFFFFF or 17 ? null : false;
-                var identity = new DisplayIdentity(PersistentId(gdiName, pathName),
-                    isBuiltIn, !string.IsNullOrWhiteSpace(pathName));
+                var fallbackId = PersistentId(gdiName, pathName);
+                var physicalId = MonitorIdentity.FromDevicePath(pathName);
+                var identity = new DisplayIdentity(physicalId ?? fallbackId,
+                    isBuiltIn, physicalId is not null, fallbackId);
                 if (result.TryGetValue(gdiName, out var existing) && existing.Id != identity.Id)
-                    result[gdiName] = new(PersistentId(gdiName, null), null, false);
+                    result[gdiName] = new(PersistentId(gdiName, null), null, false,
+                        PersistentId(gdiName, null));
                 else
                     result.TryAdd(gdiName, identity);
             }
+            foreach (var group in result.Where(item => item.Value.Stable)
+                .GroupBy(item => item.Value.Id, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1))
+                foreach (var entry in group)
+                    result[entry.Key] = entry.Value with
+                    {
+                        Id = entry.Value.FallbackId,
+                        Stable = false
+                    };
             return result;
         }
         throw new Win32Exception(122, "The display configuration kept changing during enumeration.");

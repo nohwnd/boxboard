@@ -96,6 +96,59 @@ public sealed class MonitorPinningTests
     }
 
     [TestMethod]
+    public async Task PhysicalMonitorMigration_KeepsAssignedSlotsWhenTheInstancePathChanged()
+    {
+        var board = await LoadAsync();
+        var desktop = Guid.NewGuid();
+        var previous = new LayoutKey(desktop, "previous-instance");
+        var currentInstance = new LayoutKey(desktop, "current-instance");
+        var stable = new LayoutKey(desktop, "edid:hardware-serial");
+        await board.SelectDesktopAsync(previous, "Desktop 1", 1);
+        await board.EnsureFourCellsAsync();
+        var assigned = board.GetSlots(previous).ToArray();
+        await board.SelectDesktopAsync(currentInstance, "Desktop 1", 1);
+        await board.EnsureFourCellsAsync();
+        await board.SelectDesktopAsync(previous, "Desktop 1", 1);
+        var monitor = new MonitorInfo(stable.MonitorId!, 1, new(0, 0, 1920, 1080),
+            new(0, 0, 1920, 1040), true);
+
+        var result = await MonitorPinMigration.MigrateAsync(board, [monitor],
+            path => path == previous.MonitorId ? stable.MonitorId : null);
+
+        Assert.AreEqual(1, result.Migrated);
+        Assert.IsEmpty(result.Conflicts);
+        Assert.IsTrue(board.HasLayout(stable));
+        Assert.IsFalse(board.HasLayout(previous));
+        Assert.IsTrue(board.HasLayout(currentInstance));
+        Assert.AreEqual(stable, board.SelectedKey);
+        CollectionAssert.AreEqual(assigned, board.GetSlots(stable).ToArray());
+        board.Settings.Validate();
+    }
+
+    [TestMethod]
+    public async Task PhysicalMonitorMigration_ReportsConflictingLayoutWithoutLosingAssignments()
+    {
+        var board = await LoadAsync();
+        var desktop = Guid.NewGuid();
+        var previous = new LayoutKey(desktop, "previous-instance");
+        var stable = new LayoutKey(desktop, "edid:hardware-serial");
+        await board.SelectDesktopAsync(previous, "Desktop 1", 1);
+        var assigned = board.GetSlots(previous).ToArray();
+        await board.SelectDesktopAsync(stable, "Desktop 1", 1);
+        var monitor = new MonitorInfo(stable.MonitorId!, 1, new(0, 0, 1920, 1080),
+            new(0, 0, 1920, 1040), true);
+
+        var result = await MonitorPinMigration.MigrateAsync(board, [monitor],
+            path => path == previous.MonitorId ? stable.MonitorId : null);
+
+        Assert.AreEqual(0, result.Migrated);
+        CollectionAssert.AreEqual(new[] { previous }, result.Conflicts.ToArray());
+        CollectionAssert.AreEqual(assigned, board.GetSlots(previous).ToArray());
+        Assert.IsTrue(board.HasLayout(stable));
+        board.Settings.Validate();
+    }
+
+    [TestMethod]
     public async Task PinLayout_DoesNotChangeAnotherDesktopsAssignments()
     {
         var board = await LoadAsync();
