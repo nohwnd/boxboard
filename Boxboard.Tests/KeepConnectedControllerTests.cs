@@ -15,6 +15,12 @@ public sealed class KeepConnectedControllerTests
         new(new(10, 42, 100), Machine.OriginalName, Desktop, new(0, 0, 800, 600), false, false, false);
     private static (SlotAssignment Slot, DevBoxInstance Machine)[] Assignments => [(Slot, Machine)];
 
+    private sealed class MemoryStore(BoardSettings settings) : ISettingsStore
+    {
+        public Task<BoardSettings> LoadAsync(CancellationToken ct = default) => Task.FromResult(settings);
+        public Task SaveAsync(BoardSettings next, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     private sealed class Clock : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
@@ -83,6 +89,43 @@ public sealed class KeepConnectedControllerTests
         clock.Now += TimeSpan.FromSeconds(3);
         await keep.TickAsync(Assignments, DemoData.Machines(), enabled: true);
         Assert.AreEqual(2, launches);
+    }
+
+    [TestMethod]
+    public async Task ReidentifiedMonitor_KeepOnStartsMissingClientWithoutManualReapply()
+    {
+        var board = new SlotBoard(new MemoryStore(DemoData.Settings() with
+        {
+            Slots = [Slot],
+            NextSlotNumber = 2
+        }));
+        await board.LoadAsync();
+        var oldKey = new LayoutKey(Desktop, "old-instance");
+        await board.SelectDesktopAsync(oldKey, "Desktop 1", 1);
+        var monitor = new MonitorInfo("edid:same-physical-monitor", 1,
+            new(0, 0, 1920, 1080), new(0, 0, 1920, 1040), true);
+        var migrated = await MonitorPinMigration.MigrateAsync(board, [monitor],
+            old => old == oldKey.MonitorId ? monitor.Id : null);
+        Assert.AreEqual(1, migrated.Migrated);
+        var key = new LayoutKey(Desktop, monitor.Id);
+        Assert.IsTrue(board.IsKeepConnected(key));
+
+        var windows = new Windows();
+        var clock = new Clock();
+        int launches = 0;
+        using var sessions = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-cloudpc:connect?cpcid=synthetic")),
+            _ => launches++, clock);
+        using var keep = new KeepConnectedController(windows, sessions, clock);
+        var assignments = board.GetVisibleSlots(key).Where(slot => slot.MachineId is not null)
+            .Select(slot => (slot, board.GetMachine(slot.MachineId!))).ToList();
+        await keep.TickAsync(assignments, board.Settings.Machines, board.IsKeepConnected(key));
+        clock.Now += TimeSpan.FromSeconds(3);
+        await keep.TickAsync(assignments, board.Settings.Machines, board.IsKeepConnected(key));
+
+        Assert.AreEqual(1, launches);
+        Assert.AreEqual(Slot.Id, board.GetVisibleSlots(key)[0].Id);
+        Assert.AreEqual(Slot.MachineId, board.GetVisibleSlots(key)[0].MachineId);
     }
 
     [TestMethod]

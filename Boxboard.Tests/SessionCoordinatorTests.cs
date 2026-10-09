@@ -45,6 +45,11 @@ public sealed class SessionCoordinatorTests
             return Task.CompletedTask;
         }
     }
+    private sealed class MemoryStore(BoardSettings settings) : ISettingsStore
+    {
+        public Task<BoardSettings> LoadAsync(CancellationToken ct = default) => Task.FromResult(settings);
+        public Task SaveAsync(BoardSettings next, CancellationToken ct = default) => Task.CompletedTask;
+    }
     private sealed class Clock : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
@@ -252,6 +257,53 @@ public sealed class SessionCoordinatorTests
         Assert.AreEqual(new LayoutApplyResult(0, 0, 0), again);
         Assert.AreEqual(1, launches);
         Assert.IsTrue(coordinator.For(Slot).Connecting);
+    }
+
+    [TestMethod]
+    public async Task DisconnectedLayout_ReapplyRequestsMissingClientsAndPlacesThemOnPrimary()
+    {
+        var otherMachine = DemoData.Machines()[1];
+        var otherSlot = new SlotAssignment(Guid.NewGuid(), 2, otherMachine.UniqueId);
+        var settings = DemoData.Settings() with { Slots = [Slot, otherSlot], NextSlotNumber = 3 };
+        var board = new SlotBoard(new MemoryStore(settings));
+        await board.LoadAsync();
+        var key = new LayoutKey(Desktop, "disconnected-monitor");
+        await board.SelectDesktopAsync(key, "Desktop 1", 2);
+        await board.EnsureFourCellsAsync();
+
+        var primary = new MonitorInfo("primary", 1, new(0, 0, 1920, 1080),
+            new(0, 0, 1920, 1040), true);
+        Assert.AreEqual(primary, MonitorFailover.Destination([primary], key));
+        var windows = new Windows
+        {
+            Environment = new(Desktop, true, true, primary.WorkArea)
+        };
+        int launches = 0;
+        using var coordinator = new SessionCoordinator(windows,
+            (_, _) => Task.FromResult(new Uri("ms-avd:connect?resourceid=synthetic")),
+            _ => launches++, moveToDesktop: (_, _, _) =>
+                Assert.Fail("No cross-desktop movement was needed."));
+        var first = await LayoutBatchApplier.ApplyDisconnectedAsync(board, key, coordinator);
+        Assert.AreEqual(new LayoutApplyResult(0, 0, 2), first);
+        Assert.AreEqual(2, launches);
+        Assert.IsEmpty(windows.Moves);
+
+        var second = await LayoutBatchApplier.ApplyDisconnectedAsync(board, key, coordinator);
+        Assert.AreEqual(new LayoutApplyResult(0, 0, 0), second);
+        Assert.AreEqual(2, launches);
+
+        windows.Items = [Window(), Window(2, 20) with { Title = otherMachine.OriginalName }];
+        coordinator.Observe();
+        var placements = MonitorFailover.Combine(primary.WorkArea,
+            [(key, board.GetVisibleSlots(key))]);
+        foreach (var placement in placements)
+            await coordinator.ArrangeAsync(placement.Slot,
+                board.GetMachine(placement.Slot.MachineId!), true, placement.Bounds);
+        Assert.HasCount(2, windows.Moves);
+        Assert.IsTrue(windows.Moves.All(move => primary.WorkArea.Contains(move.Bounds)));
+        Assert.AreEqual(key.MonitorId, board.Settings.PrimaryMonitorId);
+        CollectionAssert.AreEqual(new[] { Slot.MachineId, otherSlot.MachineId },
+            board.GetVisibleSlots(key).Take(2).Select(slot => slot.MachineId).ToArray());
     }
 
     [TestMethod]

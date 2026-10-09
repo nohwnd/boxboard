@@ -13,7 +13,7 @@ public sealed record DesktopLayout(Guid DesktopId, string Name, int NextSlotNumb
 {
     public bool KeepConnected { get; init; } = true;
     public WindowLayoutMode LayoutMode { get; init; } = WindowLayoutMode.Quadrants;
-    /// <summary>Adapter device name of the pinned monitor, or null for a layout saved before pinning existed.</summary>
+    /// <summary>Physical identity or legacy device path, or null before monitor pinning existed.</summary>
     public string? MonitorId { get; init; }
     public int MonitorNumber { get; init; }
     public LayoutKey Key => new(DesktopId, MonitorId);

@@ -159,7 +159,12 @@ public partial class MainWindow : Window
                         id, _board.Layouts.First(layout => layout.DesktopId == id).Name)).ToList()
                 : [new VirtualDesktopInfo(1, Guid.Empty, "Desktop 1")];
         var scroll = DesktopScroll.VerticalOffset;
-        var groups = desktops.OrderByDescending(desktop => desktop.Available)
+        var desktopsWithAssignments = _board.Layouts
+            .Where(layout => _board.GetSlots(layout.Key).Any(slot => slot.MachineId is not null))
+            .Select(layout => layout.DesktopId).ToHashSet();
+        var groups = desktops.Where(desktop =>
+                DesktopLayoutSelection.ShowDesktop(desktop, desktopsWithAssignments))
+            .OrderByDescending(desktop => desktop.Available)
             .ThenBy(desktop => desktop.Number).Select(desktop => new DesktopGroupViewModel
             {
                 DesktopId = desktop.Id,
@@ -246,7 +251,8 @@ public partial class MainWindow : Window
             IsDisconnected = !target.Available,
             DisconnectedWarning = !target.Available
                 ? $"{slots.Count(slot => slot.MachineId is not null)} saved Dev Box(es). " +
-                  (desktop.Available ? "Open clients temporarily use the primary monitor." :
+                  (desktop.Available
+                      ? "Open clients use the primary monitor; use Re-apply all to start missing clients." :
                       "The desktop is unavailable; assignments are preserved.")
                 : "",
             KeepConnected = primaryDemo || !known ? false : _board.IsKeepConnected(key),
@@ -327,7 +333,7 @@ public partial class MainWindow : Window
         else
         {
             var refresh = _board.Settings.LastRefreshUtc is { } time ? $" Last discovery: {time.ToLocalTime():g}." : "";
-            var desktops = _board.Layouts.Select(layout => layout.DesktopId).Distinct().Count();
+            var desktops = Groups.Count;
             var monitors = _monitorChoices.Count;
             StatusText.Text = $"{desktops} desktop{(desktops == 1 ? "" : "s")} · " +
                 $"{monitors} monitor{(monitors == 1 ? "" : "s")} · " +
@@ -402,6 +408,14 @@ public partial class MainWindow : Window
             _windows = new NativeSessionWindows(handle);
             var managerDesktop = _windows.GetEnvironment().DesktopId;
             _monitorChoices = _monitors.GetMonitors();
+            var migrated = await MonitorPinMigration.MigrateAsync(_board, _monitorChoices,
+                MonitorIdentity.FromDevicePath, _lifetime.Token);
+            if (migrated.Migrated > 0)
+                _log.Write("Monitors", $"Matched {migrated.Migrated} saved layout(s) to their " +
+                    "physical displays. All assigned slots and layout preferences were retained.");
+            if (migrated.Conflicts.Count > 0)
+                ReportStartupError($"{migrated.Conflicts.Count} saved monitor layout(s) have " +
+                    "conflicting assignments on the same physical display. Their pins were retained.");
             var boardMonitor = MonitorFor(_windows.MonitorWorkArea());
             _log.Write("Monitors", $"{_monitorChoices.Count} monitor(s): " +
                 string.Join(", ", _monitorChoices.Select(monitor => $"{monitor.Name} ({monitor.Description})")) +
@@ -964,6 +978,18 @@ public partial class MainWindow : Window
         return result;
     }
 
+    private async Task<LayoutApplyResult?> ReapplyDisconnectedLayoutAsync(
+        DesktopCardViewModel card, LayoutRuntime runtime)
+    {
+        runtime.KeepConnected.Reset();
+        var result = await LayoutBatchApplier.ApplyDisconnectedAsync(
+            _board, card.Key, runtime.Sessions, _lifetime.Token);
+        _log.Write("Window integration", $"{card.Name} · {card.MonitorName}: " +
+            $"{result.Bound} open client(s) found, {result.ConnectionRequests} connection(s) requested " +
+            "for temporary placement on the primary monitor. Saved monitor pins were retained.");
+        return result;
+    }
+
     private async void CardApply_Click(object sender, RoutedEventArgs e) => await RunAsync(async () =>
     {
         if (_demo)
@@ -983,23 +1009,32 @@ public partial class MainWindow : Window
             _board.GetVisibleSlots(card.Key).Any(slot => slot.MachineId is not null)).ToList();
         var available = assigned.Where(card => card.CanEdit && _layouts.ContainsKey(card.Key))
             .ToDictionary(card => card.Key);
-        var skipped = assigned.Where(card => !available.ContainsKey(card.Key))
+        var fallback = assigned.Where(card => card.IsDisconnected &&
+            _desktopChoices.Any(desktop => desktop.Id == card.DesktopId && desktop.Available) &&
+            _layouts.ContainsKey(card.Key) &&
+            MonitorFailover.Destination(_monitorChoices, card.Key) is not null)
+            .ToDictionary(card => card.Key);
+        var skipped = assigned.Where(card =>
+                !available.ContainsKey(card.Key) && !fallback.ContainsKey(card.Key))
             .Select(card => $"{card.Name} · {card.MonitorName}").ToList();
-        if (available.Count == 0 && _fallbackKeys.Count == 0)
+        var count = available.Count + fallback.Count;
+        if (count == 0)
             throw new InvalidOperationException(assigned.Count == 0
                 ? "No layouts have assigned Dev Boxes to re-apply."
-                : $"No assigned layouts are available. Disconnected: {string.Join(", ", skipped)}.");
+                : $"No assigned layouts are available. Unavailable: {string.Join(", ", skipped)}.");
 
-        var result = await LayoutBatchApplier.ApplyAsync([.. available.Keys],
-            key => ReapplyCardAsync(available[key]), _lifetime.Token);
-        var summary = $"Re-apply all: {result.Applied}/{available.Count} layout(s), " +
+        var result = await LayoutBatchApplier.ApplyAsync([.. available.Keys, .. fallback.Keys],
+            key => fallback.TryGetValue(key, out var card)
+                ? ReapplyDisconnectedLayoutAsync(card, _layouts[key])
+                : ReapplyCardAsync(available[key]), _lifetime.Token);
+        var summary = $"Re-apply all: {result.Applied}/{count} layout(s), " +
             $"{result.Bound} existing client(s) bound, {result.Moved} moved, " +
             $"{result.ConnectionRequests} connection(s) requested." +
-            (skipped.Count == 0 ? "" : $" Disconnected pins: {string.Join(", ", skipped)}.");
+            (skipped.Count == 0 ? "" : $" Unavailable: {string.Join(", ", skipped)}.");
         _log.Write("Window integration", summary);
         var failures = result.Failures.Select(failure =>
             $"{LayoutName(failure.Key)}: {failure.Error.Message}").ToList();
-        if (_fallbackKeys.Count > 0)
+        if (fallback.Count > 0 || _fallbackKeys.Count > 0)
         {
             try { await ReconcileDisplayFailoverAsync(); }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { throw; }

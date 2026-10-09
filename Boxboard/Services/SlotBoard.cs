@@ -111,6 +111,25 @@ public sealed class SlotBoard(ISettingsStore store)
             _selectedKey = new LayoutKey(key.DesktopId, monitorId);
     }
 
+    public async Task ReidentifyMonitorAsync(LayoutKey key, string monitorId, int monitorNumber,
+        CancellationToken ct = default)
+    {
+        if (key.MonitorId is null || string.IsNullOrWhiteSpace(monitorId) || monitorNumber < 1)
+            throw new ArgumentException("An existing monitor pin needs a physical identity and number.");
+        if (!HasLayout(key) || HasLayout(new(key.DesktopId, monitorId)))
+            throw new InvalidOperationException("The saved monitor layout is missing or the physical monitor already has a layout.");
+        await ChangeAsync(settings => settings.PrimaryKey == key
+            ? settings with { PrimaryMonitorId = monitorId, PrimaryMonitorNumber = monitorNumber }
+            : settings with
+            {
+                DesktopLayouts = settings.DesktopLayouts.Select(layout => layout.Key == key
+                    ? layout with { MonitorId = monitorId, MonitorNumber = monitorNumber }
+                    : layout).ToList()
+            }, ct);
+        if (_selectedKey == key)
+            _selectedKey = new(key.DesktopId, monitorId);
+    }
+
     public Task SetKeepConnectedAsync(bool enabled, CancellationToken ct = default)
     {
         if (_selectedKey is not { } selected)

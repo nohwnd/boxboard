@@ -126,6 +126,7 @@ public sealed class MonitorCardLayoutTests
                 Assert.AreEqual("Disconnected", cards[1].MonitorDetails);
                 Assert.IsTrue(cards[1].IsDisconnected);
                 StringAssert.Contains(cards[1].DisconnectedWarning, "1 saved Dev Box");
+                StringAssert.Contains(cards[1].DisconnectedWarning, "Re-apply all to start missing clients");
                 Assert.AreEqual("1 monitor · 1 disconnected with assignments", window.Groups[0].Summary);
                 Assert.IsFalse(cards[1].CanEdit);
                 Assert.IsTrue(cards[1].Cells.All(cell => cell.StateText is "Empty" or "Desktop unavailable"));
@@ -153,6 +154,38 @@ public sealed class MonitorCardLayoutTests
                 Assert.HasCount(1, window.Cards.Where(card => card.DesktopId == first).ToList());
                 Assert.IsTrue(window.Groups.All(group => group.Summary == "1 monitor"));
                 Assert.IsTrue(board.HasLayout(new LayoutKey(first, Second)));
+            }
+            finally { window.Close(); }
+        }, TimeSpan.FromSeconds(20));
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public Task PhysicalMonitorMigration_ShowsSavedAssignmentsOnConnectedCard()
+    {
+        return WpfTestHost.RunAsync(async () =>
+        {
+            var (board, first, _) = await PinnedBoardAsync();
+            var monitor = TwoMonitors().GetMonitors()[0] with
+            {
+                Id = "edid:physical-monitor",
+                StableIdentity = true
+            };
+            var result = await MonitorPinMigration.MigrateAsync(board, [monitor],
+                old => old == First ? monitor.Id : null);
+            Assert.AreEqual(1, result.Migrated);
+
+            var window = new MainWindow(board, demo: true, "offline-layout",
+                new FakeMonitors(monitor));
+            try
+            {
+                var cards = window.Cards.Where(card => card.DesktopId == first).ToList();
+                Assert.HasCount(1, cards);
+                Assert.AreEqual(monitor.Id, cards[0].MonitorId);
+                Assert.IsFalse(cards[0].IsDisconnected);
+                Assert.HasCount(3, cards[0].Cells.Where(cell => cell.IsAssigned).ToList());
+                Realize(window);
+                Capture(window, "recovered-physical-monitor");
             }
             finally { window.Close(); }
         }, TimeSpan.FromSeconds(20));

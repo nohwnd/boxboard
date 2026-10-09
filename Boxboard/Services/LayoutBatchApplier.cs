@@ -7,6 +7,17 @@ internal sealed record LayoutBatchResult(int Applied, int Bound, int Moved, int 
 
 internal static class LayoutBatchApplier
 {
+    internal static async Task<LayoutApplyResult> ApplyDisconnectedAsync(
+        SlotBoard board, LayoutKey key, SessionCoordinator sessions, CancellationToken ct = default)
+    {
+        var assignments = board.GetVisibleSlots(key).Where(slot => slot.MachineId is not null)
+            .Select(slot => (slot, board.GetMachine(slot.MachineId!))).ToList();
+        var result = await sessions.ApplyLayoutAsync(assignments, board.Settings.Machines, ct,
+            skipPendingConnections: true);
+        sessions.Observe();
+        return result;
+    }
+
     internal static async Task<LayoutBatchResult> ApplyAsync(IReadOnlyList<LayoutKey> layouts,
         Func<LayoutKey, Task<LayoutApplyResult?>> apply, CancellationToken ct = default)
     {

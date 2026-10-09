@@ -79,7 +79,8 @@ public sealed class MonitorShellTests
         foreach (var monitor in monitors)
         {
             Assert.IsFalse(string.IsNullOrWhiteSpace(monitor.GdiDeviceName));
-            Assert.AreEqual(monitor.StableIdentity, !monitor.Id.StartsWith("gdi:", StringComparison.Ordinal));
+            if (monitor.StableIdentity)
+                StringAssert.StartsWith(monitor.Id, "edid:");
             if (!monitor.StableIdentity)
                 StringAssert.Contains(monitor.Description, "pin may change");
             Assert.IsGreaterThan(0, monitor.Bounds.Width);
@@ -88,6 +89,25 @@ public sealed class MonitorShellTests
                 $"{monitor.Name} work area {monitor.WorkArea} is outside its bounds {monitor.Bounds}.");
             Assert.AreEqual($"Monitor {monitor.Number}", monitor.Name);
         }
+    }
+
+    [TestMethod]
+    public void PhysicalMonitorIdentity_DoesNotDependOnWindowsInstanceOrExtensionBytes()
+    {
+        var edid = new byte[256];
+        new byte[] { 0, 255, 255, 255, 255, 255, 255, 0 }.CopyTo(edid, 0);
+        new byte[] { 0x09, 0xd1, 0x20, 0x80, 0x45, 0x12, 0x34, 0x56 }.CopyTo(edid, 8);
+        var identity = MonitorIdentity.FromEdid(edid);
+        Assert.IsNotNull(identity);
+        StringAssert.StartsWith(identity, "edid:");
+        edid[200] = 42;
+        Assert.AreEqual(identity, MonitorIdentity.FromEdid(edid));
+        edid[12] = 3;
+        Assert.AreNotEqual(identity, MonitorIdentity.FromEdid(edid));
+        Array.Fill(edid, (byte)0, 12, 4);
+        Assert.IsNull(MonitorIdentity.FromEdid(edid));
+        Assert.IsNull(MonitorIdentity.FromDevicePath("not-a-monitor-path"));
+        Assert.IsNull(MonitorIdentity.FromDevicePath(@"\\?\DISPLAY#MODEL#..\bad#{GUID}"));
     }
 
     [TestMethod]
